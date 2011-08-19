@@ -202,7 +202,7 @@ static GElf_Addr get_glink_vma(struct ltelf *lte, GElf_Addr ppcgot,
 	return 0;
 }
 
-void
+int
 do_init_elf(struct ltelf *lte, const char *filename) {
 
 	char alt_path1[1024] = "/system/lib/";
@@ -219,13 +219,14 @@ do_init_elf(struct ltelf *lte, const char *filename) {
 	debug(1, "Reading ELF from %s...", filename);
 
 	lte->fd = open(filename, O_RDONLY);
+
 	if (lte->fd == -1) { debug(1, "searching /system/lib/..."); lte->fd = open( strcat(alt_path1, filename), O_RDONLY ); } 
 	if (lte->fd == -1) { debug(1, "searching /sys/lib/hw/..."); lte->fd = open( strcat(alt_path2, filename), O_RDONLY ); } 
 	if (lte->fd == -1) { debug(1, "searching /data/data/ ..."); lte->fd = open( strcat(alt_path3, filename), O_RDONLY ); if (lte->fd != -1) watch = 1; } 
 	if (lte->fd == -1) {
 		debug(1, "Can't open \"%s\", using as possible Android package name.\n", filename);
 		strncpy(packagename,filename,sizeof(packagename));
-		return;
+		return 0;
 	}
 
 #ifdef HAVE_ELF_C_READ_MMAP
@@ -555,6 +556,7 @@ do_init_elf(struct ltelf *lte, const char *filename) {
 
 		debug(1, "%s %zd PLT relocations", filename, lte->relplt_count);
 	}
+	return 0;
 }
 
 void
@@ -724,7 +726,8 @@ read_elf(Process *proc) {
 
 	elf_version(EV_CURRENT);
 
-	do_init_elf(lte, proc->filename);
+	if (do_init_elf(lte, proc->filename))
+		return NULL;
 
 	memcpy(&main_lte, lte, sizeof(struct ltelf));
 
@@ -736,7 +739,9 @@ read_elf(Process *proc) {
 	proc->e_machine = lte->ehdr.e_machine;
 
 	for (i = 0; i < library_num; ++i) {
-		do_init_elf(&lte[i + 1], library[i]);
+		if (do_init_elf(&lte[i + 1], library[i]))
+			error(EXIT_FAILURE, errno, "Can't open \"%s\"",
+			      proc->filename);
 	}
 
 	if (!options.no_plt) {
