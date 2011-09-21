@@ -203,7 +203,8 @@ static GElf_Addr get_glink_vma(struct ltelf *lte, GElf_Addr ppcgot,
 }
 
 int
-do_init_elf(struct ltelf *lte, const char *filename) {
+open_elf(struct ltelf *lte, const char *filename)
+{
 
 	char alt_path1[1024] = "/system/lib/";
 	char alt_path2[1024] = "/system/lib/hw/";
@@ -212,10 +213,8 @@ do_init_elf(struct ltelf *lte, const char *filename) {
 	snprintf(alt_path3,sizeof(alt_path3),"/data/data/%s/lib/",packagename);
 
 	unsigned int i, watch = 0;
-	GElf_Addr relplt_addr = 0;
-	size_t relplt_size = 0;
 
-	debug(DEBUG_FUNCTION, "do_init_elf(filename=%s)", filename);
+	debug(DEBUG_FUNCTION, "open_elf(filename=%s)", filename);
 	debug(1, "Reading ELF from %s...", filename);
 
 	lte->fd = open(filename, O_RDONLY);
@@ -226,8 +225,10 @@ do_init_elf(struct ltelf *lte, const char *filename) {
 	if (lte->fd == -1) {
 		debug(1, "Can't open \"%s\", using as possible Android package name.\n", filename);
 		strncpy(packagename,filename,sizeof(packagename));
-		return 0;
+		return;
 	}
+
+	elf_version(EV_CURRENT);
 
 #ifdef HAVE_ELF_C_READ_MMAP
 	lte->elf = elf_begin(lte->fd, ELF_C_READ_MMAP, NULL);
@@ -260,6 +261,21 @@ do_init_elf(struct ltelf *lte, const char *filename) {
 	    )
 		error(EXIT_FAILURE, 0,
 		      "\"%s\" is ELF from incompatible architecture", filename);
+
+	return 0;
+}
+
+int
+do_init_elf(struct ltelf *lte, const char *filename) {
+	int i;
+	GElf_Addr relplt_addr = 0;
+	size_t relplt_size = 0;
+
+	debug(DEBUG_FUNCTION, "do_init_elf(filename=%s)", filename);
+	debug(1, "Reading ELF from %s...", filename);
+
+	if (open_elf(lte, filename) < 0)
+		return -1;
 
 	Elf_Data *plt_data = NULL;
 	GElf_Addr ppcgot = 0;
@@ -723,8 +739,6 @@ read_elf(Process *proc) {
 	library_symbols = NULL;
 	library_num = 0;
 	proc->libdl_hooked = 0;
-
-	elf_version(EV_CURRENT);
 
 	if (do_init_elf(lte, proc->filename))
 		return NULL;
