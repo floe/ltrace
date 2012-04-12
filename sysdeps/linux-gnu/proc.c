@@ -9,6 +9,14 @@
 #include <signal.h>
 #include <unistd.h>
 
+/* We use this macro to refer to ELF types independent of the native wordsize.
+   `ElfW(TYPE)' is used in place of `Elf32_TYPE' or `Elf64_TYPE'.  */
+#define ElfW(type)	_ElfW (Elf, __ELF_NATIVE_CLASS, type)
+#define _ElfW(e,w,t)	_ElfW_1 (e, w, _##t)
+#define _ElfW_1(e,w,t)	e##w##t
+
+#define __ELF_NATIVE_CLASS 32
+
 /* /proc/pid doesn't exist just after the fork, and sometimes `ltrace'
  * couldn't open it to find the executable.  So it may be necessary to
  * have a bit delay
@@ -113,7 +121,7 @@ crawl_linkmap(Process *proc, struct r_debug *dbg, void (*callback)(void *), stru
 
 		if (callback) {
 			debug(2, "Dispatching callback for: %s, "
-					"Loaded at 0x%" PRI_ELF_ADDR "\n",
+					"Loaded at 0x%x\n",
 					lib_name, rlm.l_addr);
 			data->addr = rlm.l_addr;
 			data->lib_name = lib_name;
@@ -254,7 +262,7 @@ hook_libdl_cb(void *data) {
 
 int
 linkmap_init(Process *proc, struct ltelf *lte) {
-	void *dbg_addr = NULL, *dyn_addr = GELF_ADDR_CAST(lte->dyn_addr);
+	void *dbg_addr = NULL, *dyn_addr = (void*)((uint32_t)lte->dyn_addr);
 	struct r_debug *rdbg = NULL;
 	struct cb_data data;
 
@@ -274,7 +282,7 @@ linkmap_init(Process *proc, struct ltelf *lte) {
 
 	data.lte = lte;
 
-	add_library_symbol(rdbg->r_brk, "", &library_symbols, LS_TOPLT_NONE, 0);
+	add_library_symbol(((uint32_t)rdbg->r_brk), "", &library_symbols, LS_TOPLT_NONE, 0);
 	insert_breakpoint(proc, sym2addr(proc, library_symbols), library_symbols);
 
 	crawl_linkmap(proc, rdbg, hook_libdl_cb, &data);

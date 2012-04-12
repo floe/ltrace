@@ -70,7 +70,7 @@ umovelong (Process *proc, void *addr, long *result, arg_type_info *info) {
 void
 trace_me(void) {
 	debug(DEBUG_PROCESS, "trace_me: pid=%d\n", getpid());
-	if (ptrace(PTRACE_TRACEME, 0, 1, 0) < 0) {
+	if (ptrace(PTRACE_TRACEME, 0, (void*)1, 0) < 0) {
 		perror("PTRACE_TRACEME");
 		exit(1);
 	}
@@ -79,7 +79,7 @@ trace_me(void) {
 int
 trace_pid(pid_t pid) {
 	debug(DEBUG_PROCESS, "trace_pid: pid=%d\n", pid);
-	if (ptrace(PTRACE_ATTACH, pid, 1, 0) < 0) {
+	if (ptrace(PTRACE_ATTACH, pid, (void*)1, 0) < 0) {
 		return -1;
 	}
 
@@ -105,8 +105,8 @@ trace_set_options(Process *proc, pid_t pid) {
 	long options = PTRACE_O_TRACESYSGOOD | PTRACE_O_TRACEFORK |
 		PTRACE_O_TRACEVFORK | PTRACE_O_TRACECLONE |
 		PTRACE_O_TRACEEXEC;
-	if (ptrace(PTRACE_SETOPTIONS, pid, 0, options) < 0 &&
-	    ptrace(PTRACE_OLDSETOPTIONS, pid, 0, options) < 0) {
+	if (ptrace(PTRACE_SETOPTIONS, pid, 0, (void*)options) < 0 &&
+	    ptrace(PTRACE_OLDSETOPTIONS, pid, 0, (void*)options) < 0) {
 		perror("PTRACE_SETOPTIONS");
 		return;
 	}
@@ -116,7 +116,7 @@ trace_set_options(Process *proc, pid_t pid) {
 void
 untrace_pid(pid_t pid) {
 	debug(DEBUG_PROCESS, "untrace_pid: pid=%d\n", pid);
-	ptrace(PTRACE_DETACH, pid, 1, 0);
+	ptrace(PTRACE_DETACH, pid, (void*)1, 0);
 }
 
 void
@@ -128,12 +128,12 @@ continue_after_signal(pid_t pid, int signum) {
 	proc = pid2proc(pid);
 	if (proc && proc->breakpoint_being_enabled) {
 #if defined __sparc__  || defined __ia64___ || defined __mips__
-		ptrace(PTRACE_SYSCALL, pid, 0, signum);
+		ptrace(PTRACE_SYSCALL, pid, 0, (void*)signum);
 #else
-		ptrace(PTRACE_SINGLESTEP, pid, 0, signum);
+		ptrace(PTRACE_SINGLESTEP, pid, 0, (void*)signum);
 #endif
 	} else {
-		ptrace(PTRACE_SYSCALL, pid, 0, signum);
+		ptrace(PTRACE_SYSCALL, pid, 0, (void*)signum);
 	}
 }
 

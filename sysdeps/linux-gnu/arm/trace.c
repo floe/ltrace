@@ -44,15 +44,15 @@ syscall_p(Process *proc, int status, int *sysnum) {
 	if (WIFSTOPPED(status)
 	    && WSTOPSIG(status) == (SIGTRAP | proc->tracesysgood)) {
 		/* get the user's pc (plus 8) */
-		int pc = ptrace(PTRACE_PEEKUSER, proc->pid, off_pc, 0);
+		int pc = ptrace(PTRACE_PEEKUSER, proc->pid, (void*)off_pc, 0);
 		/* fetch the SWI instruction */
-		unsigned insn = ptrace(PTRACE_PEEKTEXT, proc->pid, pc - 4, 0);
-		int ip = ptrace(PTRACE_PEEKUSER, proc->pid, off_ip, 0);
+		unsigned insn = ptrace(PTRACE_PEEKTEXT, proc->pid, (void*)(pc - 4), 0);
+		int ip = ptrace(PTRACE_PEEKUSER, proc->pid, (void*)off_ip, 0);
 
 		if (insn == 0xef000000 || insn == 0x0f000000
 		    || (insn & 0xffff0000) == 0xdf000000) {
 			/* EABI syscall */
-			*sysnum = ptrace(PTRACE_PEEKUSER, proc->pid, off_r7, 0);
+			*sysnum = ptrace(PTRACE_PEEKUSER, proc->pid, (void*)off_r7, 0);
 		} else if ((insn & 0xfff00000) == 0xef900000) {
 			/* old ABI syscall */
 			*sysnum = insn & 0xfffff;
@@ -62,7 +62,7 @@ syscall_p(Process *proc, int status, int *sysnum) {
 			 * are coming from a signal handler, so the current
 			 * PC does not point to the instruction just after the
 			 * "swi" one. */
-			output_line(proc, "unexpected instruction 0x%x at %p", insn, pc - 4);
+			//output_line(proc, "unexpected instruction 0x%x at %p", insn, pc - 4);
 			return 0;
 		}
 		if ((*sysnum & 0xf0000) == 0xf0000) {
@@ -92,7 +92,7 @@ gimme_arg(enum tof type, Process *proc, int arg_num, arg_type_info *info) {
 				return a->regs.uregs[arg_num];
 			if (a->valid && type == LT_TOF_FUNCTIONR)
 				return a->func_arg[arg_num];
-			return ptrace(PTRACE_PEEKUSER, proc->pid, 4 * arg_num,
+			return ptrace(PTRACE_PEEKUSER, proc->pid, (void*)(4 * arg_num),
 				      0);
 		} else {
 			return ptrace(PTRACE_PEEKDATA, proc->pid,
@@ -105,7 +105,7 @@ gimme_arg(enum tof type, Process *proc, int arg_num, arg_type_info *info) {
 				return a->regs.uregs[arg_num];
 			if (a->valid && type == LT_TOF_SYSCALLR)
 				return a->sysc_arg[arg_num];
-			return ptrace(PTRACE_PEEKUSER, proc->pid, 4 * arg_num,
+			return ptrace(PTRACE_PEEKUSER, proc->pid, (void*)(4 * arg_num),
 				      0);
 		} else {
 			return ptrace(PTRACE_PEEKDATA, proc->pid,

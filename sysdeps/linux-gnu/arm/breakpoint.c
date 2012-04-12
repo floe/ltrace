@@ -49,7 +49,7 @@ arch_enable_breakpoint(pid_t pid, Breakpoint *sbp) {
 				bytes[j] = thumb_break_insn[i * sizeof(long) + j];
 			}
 		}
-		ptrace(PTRACE_POKETEXT, pid, sbp->addr + i * sizeof(long), a);
+		ptrace(PTRACE_POKETEXT, pid, sbp->addr + i * sizeof(long), (void*)a);
 	}
 }
 
@@ -67,6 +67,6 @@ arch_disable_breakpoint(pid_t pid, const Breakpoint *sbp) {
 		for (j = 0; j < sizeof(long) && i * sizeof(long) + j < BREAKPOINT_LENGTH; j++) {
 			bytes[j] = sbp->orig_value[i * sizeof(long) + j];
 		}
-		ptrace(PTRACE_POKETEXT, pid, sbp->addr + i * sizeof(long), a);
+		ptrace(PTRACE_POKETEXT, pid, sbp->addr + i * sizeof(long), (void*)a);
 	}
 }

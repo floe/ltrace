@@ -12,6 +12,7 @@ AC_CANONICAL_HOST
 
 case "${host_os}" in
     linux-gnu*)	HOST_OS="linux-gnu" ;;
+    linux-androideabi*)	HOST_OS="linux-gnu" ;;
     *)		AC_MSG_ERROR([unkown host-os ${host_osx}]) ;;
 esac
 AC_SUBST(HOST_OS)

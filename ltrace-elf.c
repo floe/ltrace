@@ -2,7 +2,12 @@
 
 #include <endian.h>
 #include <errno.h>
-#include <error.h>
+#ifndef __ANDROID__
+	#include <error.h>
+#else
+	#include <stdio.h>
+	#define error(status, errnum, format, ...) printf(format "\n", __VA_ARGS__)
+#endif
 #include <fcntl.h>
 #include <gelf.h>
 #include <inttypes.h>
@@ -138,6 +143,7 @@ static GElf_Addr get_glink_vma(struct ltelf *lte, GElf_Addr ppcgot,
 
 void
 do_init_elf(struct ltelf *lte, const char *filename) {
+	char alt_path[1024] = "/system/lib/";
 	int i;
 	GElf_Addr relplt_addr = 0;
 	size_t relplt_size = 0;
@@ -146,8 +152,11 @@ do_init_elf(struct ltelf *lte, const char *filename) {
 	debug(1, "Reading ELF from %s...", filename);
 
 	lte->fd = open(filename, O_RDONLY);
-	if (lte->fd == -1)
-		error(EXIT_FAILURE, errno, "Can't open \"%s\"", filename);
+	if (lte->fd == -1) {
+		lte->fd = open( strcat(alt_path, filename), O_RDONLY );
+		if (lte->fd == -1) 
+			error(EXIT_FAILURE, errno, "Can't open \"%s\"", filename);
+	}
 
 #ifdef HAVE_ELF_C_READ_MMAP
 	lte->elf = elf_begin(lte->fd, ELF_C_READ_MMAP, NULL);
@@ -475,7 +484,7 @@ add_library_symbol(GElf_Addr addr, const char *name,
 
 	s = malloc(sizeof(struct library_symbol) + strlen(name) + 1);
 	if (s == NULL)
-		error(EXIT_FAILURE, errno, "add_library_symbol failed");
+		error(EXIT_FAILURE, errno, "add_library_symbol %s failed", name);
 
 	s->needs_init = 1;
 	s->is_weak = is_weak;
@@ -510,7 +519,7 @@ symbol_matches(struct ltelf *lte, size_t lte_i, GElf_Sym *sym,
 	tmp = (sym) ? (sym) : (&tmp_sym);
 
 	if (gelf_getsym(lte[lte_i].dynsym, symidx, tmp) == NULL)
-		error(EXIT_FAILURE, 0, "Couldn't get symbol from .dynsym");
+		error(EXIT_FAILURE, 0, "Couldn't get symbol %s from .dynsym", name);
 	else {
 		tmp->st_value += lte[lte_i].base_addr;
 		debug(2, "symbol found: %s, %zd, %#" PRIx64,

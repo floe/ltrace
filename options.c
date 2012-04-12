@@ -7,6 +7,7 @@
 #include <errno.h>
 #include <limits.h>
 #include <sys/ioctl.h>
+#include <asm/termios.h>
 
 #include <getopt.h>
 
