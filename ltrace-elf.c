@@ -499,8 +499,10 @@ do_init_elf(struct ltelf *lte, const char *filename) {
 		while ((bl_entry = ndk_blacklist[j++]) != NULL) {
 			if (strcmp(bl_entry, name) == 0) { found = 1; break; }
 		}
-		if (!found)
+		if (!found) {
 			debug(1,"found non-blacklisted function: %s",name);
+			add_opt_x_entry((char*)name);
+		}
 	}
 
 	if (!relplt_addr || !lte->plt_addr) {

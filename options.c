@@ -71,6 +71,33 @@ err_usage(void) {
 	exit(1);
 }
 
+void
+add_opt_x_entry(char* name) {
+
+	struct opt_x_t *p = opt_x;
+
+	/* First, check for duplicate. */
+	while (p && strcmp(p->name, name)) {
+		p = p->next;
+	}
+	if (p) {
+		return;
+	}
+
+	/* If not duplicate, add to list. */
+	p = malloc(sizeof(struct opt_x_t));
+	if (!p) {
+		perror("ltrace: malloc");
+		exit(1);
+	}
+	opt_x_cnt++;
+	p->name = name;
+	p->found = 0;
+	p->next = opt_x;
+	p->hash = ~(0UL);
+	opt_x = p;
+}
+
 static void
 usage(void) {
 	fprintf(stdout, "Usage: %s [option ...] [command [arg ...]]\n"
@@ -395,28 +422,7 @@ process_options(int argc, char **argv) {
 
 		case 'x':
 			{
-				struct opt_x_t *p = opt_x;
-
-				/* First, check for duplicate. */
-				while (p && strcmp(p->name, optarg)) {
-					p = p->next;
-				}
-				if (p) {
-					break;
-				}
-
-				/* If not duplicate, add to list. */
-				p = malloc(sizeof(struct opt_x_t));
-				if (!p) {
-					perror("ltrace: malloc");
-					exit(1);
-				}
-				opt_x_cnt++;
-				p->name = optarg;
-				p->found = 0;
-				p->next = opt_x;
-				p->hash = ~(0UL);
-				opt_x = p;
+				add_opt_x_entry(optarg);
 				break;
 			}
 
