@@ -2,7 +2,12 @@
 
 #include <endian.h>
 #include <errno.h>
-#include <error.h>
+#ifndef __ANDROID__
+	#include <error.h>
+#else
+	#include <stdio.h>
+	#define error(status, errnum, format, ...) printf(format "\n", __VA_ARGS__)
+#endif
 #include <fcntl.h>
 #include <gelf.h>
 #include <inttypes.h>
@@ -13,6 +18,67 @@
 #include <assert.h>
 
 #include "common.h"
+
+char packagename[1024] = "";
+
+const char* ndk_blacklist[] = {
+	"__aeabi_unwind_cpp_pr0",
+	"__aeabi_unwind_cpp_pr1",
+	"__aeabi_unwind_cpp_pr2",
+	"_bss_end__",
+	"__bss_end__",
+	"__bss_start",
+	"__bss_start__",
+	"__data_start",
+	"__dso_handle",
+	"_edata",
+	"_end",
+	"__end__",
+	"__exidx_end",
+	"__exidx_start",
+	"__FINI_ARRAY__",
+	"__gnu_Unwind_Backtrace",
+	"__gnu_unwind_execute",
+	"__gnu_Unwind_ForcedUnwind",
+	"__gnu_unwind_frame",
+	"__gnu_Unwind_RaiseException",
+	"__gnu_Unwind_Restore_VFP",
+	"__gnu_Unwind_Restore_VFP_D",
+	"__gnu_Unwind_Restore_VFP_D_16_to_31",
+	"__gnu_Unwind_Restore_WMMXC",
+	"__gnu_Unwind_Restore_WMMXD",
+	"__gnu_Unwind_Resume",
+	"__gnu_Unwind_Resume_or_Rethrow",
+	"__gnu_Unwind_Save_VFP",
+	"__gnu_Unwind_Save_VFP_D",
+	"__gnu_Unwind_Save_VFP_D_16_to_31",
+	"__gnu_Unwind_Save_WMMXC",
+	"__gnu_Unwind_Save_WMMXD",
+	"__INIT_ARRAY__",
+	"restore_core_regs",
+	"__restore_core_regs",
+	"_Unwind_Backtrace",
+	"___Unwind_Backtrace",
+	"_Unwind_Complete",
+	"_Unwind_DeleteException",
+	"_Unwind_ForcedUnwind",
+	"___Unwind_ForcedUnwind",
+	"_Unwind_GetCFA",
+	"_Unwind_GetDataRelBase",
+	"_Unwind_GetLanguageSpecificData",
+	"_Unwind_GetRegionStart",
+	"_Unwind_GetTextRelBase",
+	"_Unwind_RaiseException",
+	"___Unwind_RaiseException",
+	"_Unwind_Resume",
+	"___Unwind_Resume",
+	"_Unwind_Resume_or_Rethrow",
+	"___Unwind_Resume_or_Rethrow",
+	"_Unwind_VRS_Get",
+	"_Unwind_VRS_Pop",
+	"_Unwind_VRS_Set",
+	NULL
+};
 
 void do_close_elf(struct ltelf *lte);
 void add_library_symbol(GElf_Addr addr, const char *name,
@@ -135,14 +201,32 @@ static GElf_Addr get_glink_vma(struct ltelf *lte, GElf_Addr ppcgot,
 	return 0;
 }
 
+unsigned int watch = 0;
+
 int
 open_elf(struct ltelf *lte, const char *filename)
 {
-	lte->fd = open(filename, O_RDONLY);
-	if (lte->fd == -1)
-		return 1;
-
 	elf_version(EV_CURRENT);
+	watch = 0;
+
+	char alt_path1[1024] = "/system/lib/";
+	char alt_path2[1024] = "/system/lib/hw/";
+	char alt_path3[1024] = "";
+
+	snprintf(alt_path3,sizeof(alt_path3),"/data/data/%s/lib/",packagename);
+
+	debug(DEBUG_FUNCTION, "do_init_elf(filename=%s)", filename);
+	debug(1, "Reading ELF from %s...", filename);
+
+	lte->fd = open(filename, O_RDONLY);
+	if (lte->fd == -1) { debug(1, "searching /system/lib/..."); lte->fd = open( strcat(alt_path1, filename), O_RDONLY ); } 
+	if (lte->fd == -1) { debug(1, "searching /sys/lib/hw/..."); lte->fd = open( strcat(alt_path2, filename), O_RDONLY ); } 
+	if (lte->fd == -1) { debug(1, "searching /data/data/ ..."); lte->fd = open( strcat(alt_path3, filename), O_RDONLY ); if (lte->fd != -1) watch = 1; } 
+	if (lte->fd == -1) {
+		debug(1, "Can't open \"%s\", using as possible Android package name.\n", filename);
+		strncpy(packagename,filename,sizeof(packagename));
+		return -1;
+	}
 
 #ifdef HAVE_ELF_C_READ_MMAP
 	lte->elf = elf_begin(lte->fd, ELF_C_READ_MMAP, NULL);
@@ -181,7 +265,7 @@ open_elf(struct ltelf *lte, const char *filename)
 
 int
 do_init_elf(struct ltelf *lte, const char *filename) {
-	int i;
+	unsigned int i;
 	GElf_Addr relplt_addr = 0;
 	size_t relplt_size = 0;
 
@@ -414,6 +498,28 @@ do_init_elf(struct ltelf *lte, const char *filename) {
 		error(EXIT_FAILURE, 0,
 		      "Couldn't find .dynsym or .dynstr in \"%s\"", filename);
 
+	// debugging: dump all dynsym entries
+	if (watch) for (i=0; i<lte->dynsym_count; i++) {
+
+		GElf_Sym sym;
+		const char *name;
+
+		if (gelf_getsym(lte->dynsym, i, &sym) == NULL) continue; 
+		if ((ELF64_ST_TYPE(sym.st_info) != STT_FUNC) || (sym.st_shndx == 0) || (sym.st_shndx > 0xFF)) continue;
+
+		name = lte->dynstr + sym.st_name;
+
+		int j = 0, found = 0;
+		const char* bl_entry;
+		while ((bl_entry = ndk_blacklist[j++]) != NULL) {
+			if (strcmp(bl_entry, name) == 0) { found = 1; break; }
+		}
+		if (!found) {
+			debug(1,"found non-blacklisted function: %s",name);
+			add_opt_x_entry((char*)name);
+		}
+	}
+
 	if (!relplt_addr || !lte->plt_addr) {
 		debug(1, "%s has no PLT relocations", filename);
 		lte->relplt = NULL;
@@ -502,7 +608,7 @@ add_library_symbol(GElf_Addr addr, const char *name,
 
 	s = create_library_symbol(name, addr);
 	if (s == NULL)
-		error(EXIT_FAILURE, errno, "add_library_symbol failed");
+		error(EXIT_FAILURE, errno, "add_library_symbol %s failed", name);
 
 	s->needs_init = 1;
 	s->is_weak = is_weak;
@@ -567,7 +673,7 @@ symbol_matches(struct ltelf *lte, size_t lte_i, GElf_Sym *sym,
 	tmp = (sym) ? (sym) : (&tmp_sym);
 
 	if (gelf_getsym(lte[lte_i].dynsym, symidx, tmp) == NULL)
-		error(EXIT_FAILURE, 0, "Couldn't get symbol from .dynsym");
+		error(EXIT_FAILURE, 0, "Couldn't get symbol %s from .dynsym", name);
 	else {
 		tmp->st_value += lte[lte_i].base_addr;
 		debug(2, "symbol found: %s, %zd, %#" PRIx64,

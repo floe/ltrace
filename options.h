@@ -60,3 +60,5 @@ extern struct opt_x_t *opt_x;	/* list of functions to break at */
 extern unsigned int opt_x_cnt;
 
 extern char **process_options(int argc, char **argv);
+
+extern void add_opt_x_entry(char* name);
