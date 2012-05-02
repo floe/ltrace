@@ -16,6 +16,9 @@
 
 #include "ptrace.h"
 #include "common.h"
+#include "breakpoint.h"
+#include "proc.h"
+#include "linux-gnu/trace.h"
 
 /* If the system headers did not provide the constants, hard-code the normal
    values.  */
@@ -106,26 +109,21 @@ trace_me(void)
 }
 
 /* There's a (hopefully) brief period of time after the child process
- * exec's when we can't trace it yet.  Here we wait for kernel to
+ * forks when we can't trace it yet.  Here we wait for kernel to
  * prepare the process.  */
-void
+int
 wait_for_proc(pid_t pid)
 {
-	size_t i;
-	for (i = 0; i < 100; ++i) {
-		/* We read from memory address 0, but that shouldn't
-		 * be a problem: the reading will just fail.  We are
-		 * looking for a particular reason of failure.  */
-		if (ptrace(PTRACE_PEEKTEXT, pid, 0, 0) != -1
-		    || errno != ESRCH)
-			return;
-
-		usleep(1000);
+	/* man ptrace: PTRACE_ATTACH attaches to the process specified
+	   in pid.  The child is sent a SIGSTOP, but will not
+	   necessarily have stopped by the completion of this call;
+	   use wait() to wait for the child to stop. */
+	if (waitpid(pid, NULL, __WALL) != pid) {
+		perror ("trace_pid: waitpid");
+		return -1;
 	}
 
-	fprintf(stderr, "\
-I consistently fail to read a word from the freshly launched process.\n\
-I'll now try to proceed with tracing, but this shouldn't be happening.\n");
+	return 0;
 }
 
 int
@@ -138,23 +136,16 @@ trace_pid(pid_t pid)
 	if (ptrace(PTRACE_ATTACH, pid, (void*)1, 0) < 0)
 		return -1;
 
-	/* man ptrace: PTRACE_ATTACH attaches to the process specified
-	   in pid.  The child is sent a SIGSTOP, but will not
-	   necessarily have stopped by the completion of this call;
-	   use wait() to wait for the child to stop. */
-	if (waitpid (pid, NULL, __WALL) != pid) {
-		perror ("trace_pid: waitpid");
-		return -1;
-	}
-
-	return 0;
+	return wait_for_proc(pid);
 }
 
 void
-trace_set_options(Process *proc, pid_t pid) {
+trace_set_options(struct Process *proc)
+{
 	if (proc->tracesysgood & 0x80)
 		return;
 
+	pid_t pid = proc->pid;
 	debug(DEBUG_PROCESS, "trace_set_options: pid=%d", pid);
 
 	long options = PTRACE_O_TRACESYSGOOD | PTRACE_O_TRACEFORK |
@@ -211,67 +202,6 @@ continue_process(pid_t pid)
 		      "putting off the continue, events in que.");
 }
 
-/**
- * This is used for bookkeeping related to PIDs that the event
- * handlers work with.
- */
-struct pid_task {
-	pid_t pid;	/* This may be 0 for tasks that exited
-			 * mid-handling.  */
-	int sigstopped : 1;
-	int got_event : 1;
-	int delivered : 1;
-	int vforked : 1;
-	int sysret : 1;
-} * pids;
-
-struct pid_set {
-	struct pid_task * tasks;
-	size_t count;
-	size_t alloc;
-};
-
-/**
- * Breakpoint re-enablement.  When we hit a breakpoint, we must
- * disable it, single-step, and re-enable it.  That single-step can be
- * done only by one task in a task group, while others are stopped,
- * otherwise the processes would race for who sees the breakpoint
- * disabled and who doesn't.  The following is to keep track of it
- * all.
- */
-struct process_stopping_handler
-{
-	Event_Handler super;
-
-	/* The task that is doing the re-enablement.  */
-	Process * task_enabling_breakpoint;
-
-	/* The pointer being re-enabled.  */
-	Breakpoint * breakpoint_being_enabled;
-
-	/* Artificial atomic skip breakpoint, if any needed.  */
-	void *atomic_skip_bp_addr;
-
-	enum {
-		/* We are waiting for everyone to land in t/T.  */
-		psh_stopping = 0,
-
-		/* We are doing the PTRACE_SINGLESTEP.  */
-		psh_singlestep,
-
-		/* We are waiting for all the SIGSTOPs to arrive so
-		 * that we can sink them.  */
-		psh_sinking,
-
-		/* This is for tracking the ugly workaround.  */
-		psh_ugly_workaround,
-	} state;
-
-	int exiting;
-
-	struct pid_set pids;
-};
-
 static struct pid_task *
 get_task_info(struct pid_set * pids, pid_t pid)
 {
@@ -302,8 +232,8 @@ add_task_info(struct pid_set * pids, pid_t pid)
 	return task_info;
 }
 
-static enum pcb_status
-task_stopped(Process * task, void * data)
+static enum callback_status
+task_stopped(struct Process *task, void *data)
 {
 	enum process_status st = process_status(task->pid);
 	if (data != NULL)
@@ -317,48 +247,48 @@ task_stopped(Process * task, void * data)
 	case ps_invalid:
 	case ps_tracing_stop:
 	case ps_zombie:
-		return pcb_cont;
+		return CBS_CONT;
 	case ps_sleeping:
 	case ps_stop:
 	case ps_other:
-		return pcb_stop;
+		return CBS_STOP;
 	}
 
 	abort ();
 }
 
 /* Task is blocked if it's stopped, or if it's a vfork parent.  */
-static enum pcb_status
-task_blocked(Process * task, void * data)
+static enum callback_status
+task_blocked(struct Process *task, void *data)
 {
 	struct pid_set * pids = data;
 	struct pid_task * task_info = get_task_info(pids, task->pid);
 	if (task_info != NULL
 	    && task_info->vforked)
-		return pcb_cont;
+		return CBS_CONT;
 
 	return task_stopped(task, NULL);
 }
 
-static Event * process_vfork_on_event(Event_Handler * super, Event * event);
+static Event *process_vfork_on_event(struct event_handler *super, Event *event);
 
-static enum pcb_status
-task_vforked(Process * task, void * data)
+static enum callback_status
+task_vforked(struct Process *task, void *data)
 {
 	if (task->event_handler != NULL
 	    && task->event_handler->on_event == &process_vfork_on_event)
-		return pcb_stop;
-	return pcb_cont;
+		return CBS_STOP;
+	return CBS_CONT;
 }
 
 static int
-is_vfork_parent(Process * task)
+is_vfork_parent(struct Process *task)
 {
-	return each_task(task->leader, &task_vforked, NULL) != NULL;
+	return each_task(task->leader, NULL, &task_vforked, NULL) != NULL;
 }
 
-static enum pcb_status
-send_sigstop(Process * task, void * data)
+static enum callback_status
+send_sigstop(struct Process *task, void *data)
 {
 	Process * leader = task->leader;
 	struct pid_set * pids = data;
@@ -371,24 +301,24 @@ send_sigstop(Process * task, void * data)
 		perror("send_sigstop: add_task_info");
 		destroy_event_handler(leader);
 		/* Signal failure upwards.  */
-		return pcb_stop;
+		return CBS_STOP;
 	}
 
 	/* This task still has not been attached to.  It should be
 	   stopped by the kernel.  */
 	if (task->state == STATE_BEING_CREATED)
-		return pcb_cont;
+		return CBS_CONT;
 
 	/* Don't bother sending SIGSTOP if we are already stopped, or
 	 * if we sent the SIGSTOP already, which happens when we are
 	 * handling "onexit" and inherited the handler from breakpoint
 	 * re-enablement.  */
 	enum process_status st;
-	if (task_stopped(task, &st) == pcb_cont)
-		return pcb_cont;
+	if (task_stopped(task, &st) == CBS_CONT)
+		return CBS_CONT;
 	if (task_info->sigstopped) {
 		if (!task_info->delivered)
-			return pcb_cont;
+			return CBS_CONT;
 		task_info->delivered = 0;
 	}
 
@@ -399,7 +329,7 @@ send_sigstop(Process * task, void * data)
 	if (st == ps_sleeping
 	    && is_vfork_parent (task)) {
 		task_info->vforked = 1;
-		return pcb_cont;
+		return CBS_CONT;
 	}
 
 	if (task_kill(task->pid, SIGSTOP) >= 0) {
@@ -409,7 +339,7 @@ send_sigstop(Process * task, void * data)
 		fprintf(stderr,
 			"Warning: couldn't send SIGSTOP to %d\n", task->pid);
 
-	return pcb_cont;
+	return CBS_CONT;
 }
 
 /* On certain kernels, detaching right after a singlestep causes the
@@ -421,11 +351,11 @@ static void
 ugly_workaround(Process * proc)
 {
 	void * ip = get_instruction_pointer(proc);
-	Breakpoint * sbp = dict_find_entry(proc->leader->breakpoints, ip);
+	struct breakpoint *sbp = dict_find_entry(proc->leader->breakpoints, ip);
 	if (sbp != NULL)
 		enable_breakpoint(proc, sbp);
 	else
-		insert_breakpoint(proc, ip, NULL, 1);
+		insert_breakpoint(proc, ip, NULL);
 	ptrace(PTRACE_CONT, proc->pid, 0, 0);
 }
 
@@ -443,9 +373,21 @@ process_stopping_done(struct process_stopping_handler * self, Process * leader)
 				continue_process(self->pids.tasks[i].pid);
 		continue_process(self->task_enabling_breakpoint->pid);
 		destroy_event_handler(leader);
-	} else {
+	}
+
+	if (self->exiting) {
+	ugly_workaround:
 		self->state = psh_ugly_workaround;
 		ugly_workaround(self->task_enabling_breakpoint);
+	} else {
+		switch ((self->ugly_workaround_p)(self)) {
+		case CBS_FAIL:
+			/* xxx handle me */
+		case CBS_STOP:
+			break;
+		case CBS_CONT:
+			goto ugly_workaround;
+		}
 	}
 }
 
@@ -463,21 +405,28 @@ undo_breakpoint(Event * event, void * data)
 	return ecb_cont;
 }
 
-static enum pcb_status
-untrace_task(Process * task, void * data)
+static enum callback_status
+untrace_task(struct Process *task, void *data)
 {
 	if (task != data)
 		untrace_pid(task->pid);
-	return pcb_cont;
+	return CBS_CONT;
 }
 
-static enum pcb_status
-remove_task(Process * task, void * data)
+static enum callback_status
+remove_task(struct Process *task, void *data)
 {
 	/* Don't untrace leader just yet.  */
 	if (task != data)
 		remove_process(task);
-	return pcb_cont;
+	return CBS_CONT;
+}
+
+static enum callback_status
+retract_breakpoint_cb(struct Process *proc, struct breakpoint *bp, void *data)
+{
+	breakpoint_on_retract(bp, proc);
+	return CBS_CONT;
 }
 
 static void
@@ -485,6 +434,7 @@ detach_process(Process * leader)
 {
 	each_qd_event(&undo_breakpoint, leader);
 	disable_all_breakpoints(leader);
+	proc_each_breakpoint(leader, NULL, retract_breakpoint_cb, NULL);
 
 	/* Now untrace the process, if it was attached to by -p.  */
 	struct opt_p_t * it;
@@ -493,11 +443,11 @@ detach_process(Process * leader)
 		if (proc == NULL)
 			continue;
 		if (proc->leader == leader) {
-			each_task(leader, &untrace_task, NULL);
+			each_task(leader, NULL, &untrace_task, NULL);
 			break;
 		}
 	}
-	each_task(leader, &remove_task, leader);
+	each_task(leader, NULL, &remove_task, leader);
 	destroy_event_handler(leader);
 	remove_task(leader, NULL);
 }
@@ -617,13 +567,13 @@ all_stops_accountable(struct pid_set * pids)
 
 /* The protocol is: 0 for success, negative for failure, positive if
  * default singlestep is to be used.  */
-int arch_atomic_singlestep(struct Process *proc, Breakpoint *sbp,
+int arch_atomic_singlestep(struct Process *proc, struct breakpoint *sbp,
 			   int (*add_cb)(void *addr, void *data),
 			   void *add_cb_data);
 
 #ifndef ARCH_HAVE_ATOMIC_SINGLESTEP
 int
-arch_atomic_singlestep(struct Process *proc, Breakpoint *sbp,
+arch_atomic_singlestep(struct Process *proc, struct breakpoint *sbp,
 		       int (*add_cb)(void *addr, void *data),
 		       void *add_cb_data)
 {
@@ -631,19 +581,56 @@ arch_atomic_singlestep(struct Process *proc, Breakpoint *sbp,
 }
 #endif
 
+static Event *process_stopping_on_event(struct event_handler *super,
+					Event *event);
+
+static void
+remove_atomic_breakpoints(struct Process *proc)
+{
+	struct process_stopping_handler *self
+		= (void *)proc->leader->event_handler;
+	assert(self != NULL);
+	assert(self->super.on_event == process_stopping_on_event);
+
+	int ct = sizeof(self->atomic_skip_bp_addrs)
+		/ sizeof(*self->atomic_skip_bp_addrs);
+	int i;
+	for (i = 0; i < ct; ++i)
+		if (self->atomic_skip_bp_addrs[i] != 0) {
+			delete_breakpoint(proc, self->atomic_skip_bp_addrs[i]);
+			self->atomic_skip_bp_addrs[i] = 0;
+		}
+}
+
+static void
+atomic_singlestep_bp_on_hit(struct breakpoint *bp, struct Process *proc)
+{
+	remove_atomic_breakpoints(proc);
+}
+
 static int
 atomic_singlestep_add_bp(void *addr, void *data)
 {
 	struct process_stopping_handler *self = data;
 	struct Process *proc = self->task_enabling_breakpoint;
 
-	/* Only support single address as of now.  */
-	assert(self->atomic_skip_bp_addr == NULL);
+	int ct = sizeof(self->atomic_skip_bp_addrs)
+		/ sizeof(*self->atomic_skip_bp_addrs);
+	int i;
+	for (i = 0; i < ct; ++i)
+		if (self->atomic_skip_bp_addrs[i] == 0) {
+			self->atomic_skip_bp_addrs[i] = addr;
+			static struct bp_callbacks cbs = {
+				.on_hit = atomic_singlestep_bp_on_hit,
+			};
+			struct breakpoint *bp
+				= insert_breakpoint(proc, addr, NULL);
+			breakpoint_set_callbacks(bp, &cbs);
+			return 0;
+		}
 
-	self->atomic_skip_bp_addr = addr + 4;
-	insert_breakpoint(proc->leader, self->atomic_skip_bp_addr, NULL, 1);
-
-	return 0;
+	assert(!"Too many atomic singlestep breakpoints!");
+	abort();
 }
 
 static int
@@ -669,30 +656,68 @@ singlestep(struct process_stopping_handler *self)
 }
 
 static void
-post_singlestep(struct process_stopping_handler *self, Event **eventp)
+post_singlestep(struct process_stopping_handler *self,
+		struct Event **eventp)
 {
 	continue_for_sigstop_delivery(&self->pids);
 
-	if ((*eventp)->type == EVENT_BREAKPOINT)
+	if (*eventp != NULL && (*eventp)->type == EVENT_BREAKPOINT)
 		*eventp = NULL; // handled
 
-	if (self->atomic_skip_bp_addr != 0)
-		delete_breakpoint(self->task_enabling_breakpoint->leader,
-				  self->atomic_skip_bp_addr);
+	struct Process *proc = self->task_enabling_breakpoint;
 
+	remove_atomic_breakpoints(proc);
 	self->breakpoint_being_enabled = NULL;
 }
 
 static void
-singlestep_error(struct process_stopping_handler *self, Event **eventp)
+singlestep_error(struct process_stopping_handler *self)
 {
 	struct Process *teb = self->task_enabling_breakpoint;
-	Breakpoint *sbp = self->breakpoint_being_enabled;
-	fprintf(stderr, "%d couldn't singlestep over %s (%p)\n",
+	struct breakpoint *sbp = self->breakpoint_being_enabled;
+	fprintf(stderr, "%d couldn't continue when handling %s (%p) at %p\n",
 		teb->pid, sbp->libsym != NULL ? sbp->libsym->name : NULL,
-		sbp->addr);
+		sbp->addr, get_instruction_pointer(teb));
 	delete_breakpoint(teb->leader, sbp->addr);
-	post_singlestep(self, eventp);
+}
+
+static void
+pt_continue(struct process_stopping_handler *self)
+{
+	struct Process *teb = self->task_enabling_breakpoint;
+	debug(1, "PTRACE_CONT");
+	ptrace(PTRACE_CONT, teb->pid, 0, 0);
+}
+
+static void
+pt_singlestep(struct process_stopping_handler *self)
+{
+	if (singlestep(self) < 0)
+		singlestep_error(self);
+}
+
+static void
+disable_and(struct process_stopping_handler *self,
+	    void (*do_this)(struct process_stopping_handler *self))
+{
+	struct Process *teb = self->task_enabling_breakpoint;
+	debug(DEBUG_PROCESS, "all stopped, now singlestep/cont %d", teb->pid);
+	if (self->breakpoint_being_enabled->enabled)
+		disable_breakpoint(teb, self->breakpoint_being_enabled);
+	(do_this)(self);
+	self->state = psh_singlestep;
+}
+
+void
+linux_ptrace_disable_and_singlestep(struct process_stopping_handler *self)
+{
+	disable_and(self, &pt_singlestep);
+}
+
+void
+linux_ptrace_disable_and_continue(struct process_stopping_handler *self)
+{
+	disable_and(self, &pt_continue);
 }
 
 /* This event handler is installed when we are in the process of
@@ -702,16 +727,15 @@ singlestep_error(struct process_stopping_handler *self, Event **eventp)
  * happens, we let the re-enablement thread to PTRACE_SINGLESTEP,
  * re-enable, and continue everyone.  */
 static Event *
-process_stopping_on_event(Event_Handler * super, Event * event)
+process_stopping_on_event(struct event_handler *super, Event *event)
 {
 	struct process_stopping_handler * self = (void *)super;
 	Process * task = event->proc;
 	Process * leader = task->leader;
-	Breakpoint * sbp = self->breakpoint_being_enabled;
 	Process * teb = self->task_enabling_breakpoint;
 
 	debug(DEBUG_PROCESS,
-	      "pid %d; event type %d; state %d",
+	      "process_stopping_on_event: pid %d; event type %d; state %d",
 	      task->pid, event->type, self->state);
 
 	struct pid_task * task_info = get_task_info(&self->pids, task->pid);
@@ -740,17 +764,10 @@ process_stopping_on_event(Event_Handler * super, Event * event)
 	switch (state) {
 	case psh_stopping:
 		/* If everyone is stopped, singlestep.  */
-		if (each_task(leader, &task_blocked, &self->pids) == NULL) {
-			debug(DEBUG_PROCESS, "all stopped, now SINGLESTEP %d",
-			      teb->pid);
-			if (sbp->enabled)
-				disable_breakpoint(teb, sbp);
-			if (singlestep(self) < 0) {
-				singlestep_error(self, &event);
-				goto psh_sinking;
-			}
-
-			self->state = state = psh_singlestep;
+		if (each_task(leader, NULL, &task_blocked,
+			      &self->pids) == NULL) {
+			(self->on_all_stopped)(self);
+			state = self->state;
 		}
 		break;
 
@@ -759,18 +776,47 @@ process_stopping_on_event(Event_Handler * super, Event * event)
 		 * have now stepped, and can re-enable the breakpoint.  */
 		if (event != NULL && task == teb) {
 
-			/* This is not the singlestep that we are waiting for.  */
+			/* If this was caused by a real breakpoint, as
+			 * opposed to a singlestep, assume that it's
+			 * an artificial breakpoint installed for some
+			 * reason for the re-enablement.  In that case
+			 * handle it.  */
+			if (event->type == EVENT_BREAKPOINT) {
+				target_address_t ip
+					= get_instruction_pointer(task);
+				struct breakpoint *other
+					= address2bpstruct(leader, ip);
+				if (other != NULL)
+					breakpoint_on_hit(other, task);
+			}
+
+			/* If we got SIGNAL instead of BREAKPOINT,
+			 * then this is not singlestep at all.  */
 			if (event->type == EVENT_SIGNAL) {
+			do_singlestep:
 				if (singlestep(self) < 0) {
-					singlestep_error(self, &event);
+					singlestep_error(self);
+					post_singlestep(self, &event);
 					goto psh_sinking;
 				}
 				break;
+			} else {
+				switch ((self->keep_stepping_p)(self)) {
+				case CBS_FAIL:
+					/* XXX handle me */
+				case CBS_STOP:
+					break;
+				case CBS_CONT:
+					/* Sink singlestep event.  */
+					if (event->type == EVENT_BREAKPOINT)
+						event = NULL;
+					goto do_singlestep;
+				}
 			}
 
-			/* Essentially we don't care what event caused
-			 * the thread to stop.  We can do the
-			 * re-enablement now.  */
+			/* Re-enable the breakpoint that we are
+			 * stepping over.  */
+			struct breakpoint *sbp = self->breakpoint_being_enabled;
 			if (sbp->enabled)
 				enable_breakpoint(teb, sbp);
 
@@ -811,52 +857,89 @@ process_stopping_on_event(Event_Handler * super, Event * event)
 }
 
 static void
-process_stopping_destroy(Event_Handler * super)
+process_stopping_destroy(struct event_handler *super)
 {
 	struct process_stopping_handler * self = (void *)super;
 	free(self->pids.tasks);
 }
 
-void
-continue_after_breakpoint(Process *proc, Breakpoint *sbp)
+static enum callback_status
+no(struct process_stopping_handler *self)
 {
+	return CBS_STOP;
+}
+
+int
+process_install_stopping_handler(struct Process *proc, struct breakpoint *sbp,
+				 void (*as)(struct process_stopping_handler *),
+				 enum callback_status (*ks)
+					 (struct process_stopping_handler *),
+				 enum callback_status (*uw)
+					(struct process_stopping_handler *))
+{
+	debug(DEBUG_FUNCTION,
+	      "process_install_stopping_handler: pid=%d", proc->pid);
+
+	struct process_stopping_handler *handler = calloc(sizeof(*handler), 1);
+	if (handler == NULL)
+		return -1;
+
+	if (as == NULL)
+		as = &linux_ptrace_disable_and_singlestep;
+	if (ks == NULL)
+		ks = &no;
+	if (uw == NULL)
+		uw = &no;
+
+	handler->super.on_event = process_stopping_on_event;
+	handler->super.destroy = process_stopping_destroy;
+	handler->task_enabling_breakpoint = proc;
+	handler->breakpoint_being_enabled = sbp;
+	handler->on_all_stopped = as;
+	handler->keep_stepping_p = ks;
+	handler->ugly_workaround_p = uw;
+
+	install_event_handler(proc->leader, &handler->super);
+
+	if (each_task(proc->leader, NULL, &send_sigstop,
+		      &handler->pids) != NULL) {
+		destroy_event_handler(proc);
+		return -1;
+	}
+
+	/* And deliver the first fake event, in case all the
+	 * conditions are already fulfilled.  */
+	Event ev = {
+		.type = EVENT_NONE,
+		.proc = proc,
+	};
+	process_stopping_on_event(&handler->super, &ev);
+
+	return 0;
+}
+
+void
+continue_after_breakpoint(Process *proc, struct breakpoint *sbp)
+{
+	debug(DEBUG_PROCESS,
+	      "continue_after_breakpoint: pid=%d, addr=%p",
+	      proc->pid, sbp->addr);
+
 	set_instruction_pointer(proc, sbp->addr);
+
 	if (sbp->enabled == 0) {
 		continue_process(proc->pid);
 	} else {
-		debug(DEBUG_PROCESS,
-		      "continue_after_breakpoint: pid=%d, addr=%p",
-		      proc->pid, sbp->addr);
 #if defined __sparc__  || defined __ia64___ || defined __mips__
 		/* we don't want to singlestep here */
 		continue_process(proc->pid);
 #else
-		struct process_stopping_handler * handler
-			= calloc(sizeof(*handler), 1);
-		if (handler == NULL) {
-			perror("malloc breakpoint disable handler");
-		fatal:
+		if (process_install_stopping_handler
+		    (proc, sbp, NULL, NULL, NULL) < 0) {
+			perror("process_stopping_handler_create");
 			/* Carry on not bothering to re-enable.  */
 			continue_process(proc->pid);
-			return;
 		}
-
-		handler->super.on_event = process_stopping_on_event;
-		handler->super.destroy = process_stopping_destroy;
-		handler->task_enabling_breakpoint = proc;
-		handler->breakpoint_being_enabled = sbp;
-		install_event_handler(proc->leader, &handler->super);
-
-		if (each_task(proc->leader, &send_sigstop,
-			      &handler->pids) != NULL)
-			goto fatal;
-
-		/* And deliver the first fake event, in case all the
-		 * conditions are already fulfilled.  */
-		Event ev;
-		ev.type = EVENT_NONE;
-		ev.proc = proc;
-		process_stopping_on_event(&handler->super, &ev);
 #endif
 	}
 }
@@ -871,18 +954,20 @@ continue_after_breakpoint(Process *proc, Breakpoint *sbp)
  */
 struct ltrace_exiting_handler
 {
-	Event_Handler super;
+	struct event_handler super;
 	struct pid_set pids;
 };
 
 static Event *
-ltrace_exiting_on_event(Event_Handler * super, Event * event)
+ltrace_exiting_on_event(struct event_handler *super, Event *event)
 {
 	struct ltrace_exiting_handler * self = (void *)super;
 	Process * task = event->proc;
 	Process * leader = task->leader;
 
-	debug(DEBUG_PROCESS, "pid %d; event type %d", task->pid, event->type);
+	debug(DEBUG_PROCESS,
+	      "ltrace_exiting_on_event: pid %d; event type %d",
+	      task->pid, event->type);
 
 	struct pid_task * task_info = get_task_info(&self->pids, task->pid);
 	handle_stopping_event(task_info, &event);
@@ -903,7 +988,7 @@ ltrace_exiting_on_event(Event_Handler * super, Event * event)
 }
 
 static void
-ltrace_exiting_destroy(Event_Handler * super)
+ltrace_exiting_destroy(struct event_handler *super)
 {
 	struct ltrace_exiting_handler * self = (void *)super;
 	free(self->pids.tasks);
@@ -946,7 +1031,7 @@ ltrace_exiting_install_handler(Process * proc)
 	handler->super.destroy = ltrace_exiting_destroy;
 	install_event_handler(proc->leader, &handler->super);
 
-	if (each_task(proc->leader, &send_sigstop,
+	if (each_task(proc->leader, NULL, &send_sigstop,
 		      &handler->pids) != NULL)
 		goto fatal;
 
@@ -974,21 +1059,25 @@ ltrace_exiting_install_handler(Process * proc)
 
 struct process_vfork_handler
 {
-	Event_Handler super;
+	struct event_handler super;
 	void * bp_addr;
 };
 
 static Event *
-process_vfork_on_event(Event_Handler * super, Event * event)
+process_vfork_on_event(struct event_handler *super, Event *event)
 {
+	debug(DEBUG_PROCESS,
+	      "process_vfork_on_event: pid %d; event type %d",
+	      event->proc->pid, event->type);
+
 	struct process_vfork_handler * self = (void *)super;
-	Breakpoint * sbp;
+	struct breakpoint *sbp;
 	assert(self != NULL);
 
 	switch (event->type) {
 	case EVENT_BREAKPOINT:
 		/* Remember the vfork return breakpoint.  */
-		if (self->bp_addr == NULL)
+		if (self->bp_addr == 0)
 			self->bp_addr = event->e_un.brk_addr;
 		break;
 
@@ -997,13 +1086,15 @@ process_vfork_on_event(Event_Handler * super, Event * event)
 	case EVENT_EXEC:
 		/* Smuggle back in the vfork return breakpoint, so
 		 * that our parent can trip over it once again.  */
-		if (self->bp_addr != NULL) {
+		if (self->bp_addr != 0) {
 			sbp = dict_find_entry(event->proc->leader->breakpoints,
 					      self->bp_addr);
 			if (sbp != NULL)
-				insert_breakpoint(event->proc->parent,
-						  self->bp_addr,
-						  sbp->libsym, 1);
+				assert(sbp->libsym == NULL);
+			/* We don't mind failing that, it's not a big
+			 * deal to not display one extra vfork return.  */
+			insert_breakpoint(event->proc->parent,
+					  self->bp_addr, NULL);
 		}
 
 		continue_process(event->proc->parent->pid);

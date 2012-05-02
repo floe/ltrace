@@ -27,7 +27,8 @@
 #include "common.h"
 
 void
-arch_enable_breakpoint(pid_t pid, Breakpoint *sbp) {
+arch_enable_breakpoint(pid_t pid, struct breakpoint *sbp)
+{
 	unsigned int i, j;
 	const unsigned char break_insn[] = BREAKPOINT_VALUE;
 	const unsigned char thumb_break_insn[] = THUMB_BREAKPOINT_VALUE;
@@ -59,7 +60,8 @@ arch_enable_breakpoint(pid_t pid, Breakpoint *sbp) {
 }
 
 void
-arch_disable_breakpoint(pid_t pid, const Breakpoint *sbp) {
+arch_disable_breakpoint(pid_t pid, const struct breakpoint *sbp)
+{
 	unsigned int i, j;
 
 	debug(1, "arch_disable_breakpoint(%d,%p)", pid, sbp->addr);
@@ -79,4 +81,30 @@ arch_disable_breakpoint(pid_t pid, const Breakpoint *sbp) {
 		}
 		ptrace(PTRACE_POKETEXT, pid, sbp->addr + i * sizeof(long), (void*)current.l);
 	}
+}
+
+int
+arch_breakpoint_init(struct Process *proc, struct breakpoint *sbp)
+{
+	/* XXX That uintptr_t cast is there temporarily until
+	 * target_address_t becomes integral type.  */
+	int thumb_mode = ((uintptr_t)sbp->addr) & 1;
+	if (thumb_mode)
+		sbp->addr = (void *)((uintptr_t)sbp->addr & ~1);
+	sbp->arch.thumb_mode = thumb_mode | proc->thumb_mode;
+	/* XXX This doesn't seem like it belongs here.  */
+	proc->thumb_mode = 0;
+	return 0;
+}
+
+void
+arch_breakpoint_destroy(struct breakpoint *sbp)
+{
+}
+
+int
+arch_breakpoint_clone(struct breakpoint *retp, struct breakpoint *sbp)
+{
+	retp->arch.thumb_mode = sbp->arch.thumb_mode;
+	return 0;
 }

@@ -3,7 +3,10 @@
 #include <sys/types.h>
 #include <sys/ptrace.h>
 #include <asm/ptrace.h>
+#include <errno.h>
+#include <error.h>
 
+#include "proc.h"
 #include "common.h"
 
 #if (!defined(PTRACE_PEEKUSER) && defined(PTRACE_PEEKUSR))
@@ -20,8 +23,10 @@ get_instruction_pointer(Process *proc) {
 }
 
 void
-set_instruction_pointer(Process *proc, void *addr) {
-	ptrace(PTRACE_POKEUSER, proc->pid, sizeof(long)*PT_NIP, addr);
+set_instruction_pointer(Process *proc, void *addr)
+{
+	if (ptrace(PTRACE_POKEUSER, proc->pid, sizeof(long)*PT_NIP, addr) != 0)
+		error(0, errno, "set_instruction_pointer");
 }
 
 void *

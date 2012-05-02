@@ -1,17 +1,21 @@
 #include "config.h"
 
-#include <string.h>
-#include <stdlib.h>
-#include <unistd.h>
-#include <fcntl.h>
-#include <errno.h>
-#include <limits.h>
 #include <sys/ioctl.h>
 #include <asm/termios.h>
 
+#include <assert.h>
+#include <errno.h>
+#include <fcntl.h>
 #include <getopt.h>
+#include <limits.h>
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include <unistd.h>
 
 #include "common.h"
+#include "filter.h"
+#include "glob.h"
 
 #ifndef SYSCONFDIR
 #define SYSCONFDIR "/etc"
@@ -24,7 +28,6 @@ struct options_t options = {
 	.align    = DEFAULT_ALIGN,    /* alignment column for results */
 	.user     = NULL,             /* username to run command as */
 	.syscalls = 0,                /* display syscalls */
-	.libcalls = 1,                /* display library calls */
 #ifdef USE_DEMANGLE
 	.demangle = 0,                /* Demangle low-level symbol names */
 #endif
@@ -37,8 +40,6 @@ struct options_t options = {
 	.follow = 0,                  /* trace child processes */
 };
 
-char *library[MAX_LIBRARIES];
-size_t library_num = 0;
 static char *progname;		/* Program name (`ltrace') */
 int opt_i = 0;			/* instruction pointer */
 int opt_r = 0;			/* print relative timestamp */
@@ -47,14 +48,6 @@ int opt_T = 0;			/* show the time spent inside each call */
 
 /* List of pids given to option -p: */
 struct opt_p_t *opt_p = NULL;	/* attach to process with a given pid */
-
-/* List of function names given to option -e: */
-struct opt_e_t *opt_e = NULL;
-int opt_e_enable = 1;
-
-/* List of global function names given to -x: */
-struct opt_x_t *opt_x = NULL;
-unsigned int opt_x_cnt = 0;
 
 /* List of filenames give to option -F: */
 struct opt_F_t *opt_F = NULL;	/* alternate configuration file(s) */
@@ -209,17 +202,229 @@ guess_cols(void) {
 	}
 }
 
+static void
+add_filter_rule(struct filter *filt, const char *expr,
+		enum filter_rule_type type,
+		const char *a_sym, int sym_re_p,
+		const char *a_lib, int lib_re_p)
+{
+	struct filter_rule *rule = malloc(sizeof(*rule));
+	struct filter_lib_matcher *matcher = malloc(sizeof(*matcher));
+
+	if (rule == NULL || matcher == NULL) {
+		fprintf(stderr, "rule near '%s' will be ignored: %s\n",
+			expr, strerror(errno));
+	fail:
+		free(rule);
+		free(matcher);
+		return;
+	}
+
+	regex_t symbol_re;
+	int status;
+	{
+		/* Add ^ to the start of expression and $ to the end, so that
+		 * we match the whole symbol name.  Let the user write the "*"
+		 * explicitly if they wish.  */
+		char sym[strlen(a_sym) + 3];
+		sprintf(sym, "^%s$", a_sym);
+		status = (sym_re_p ? regcomp : globcomp)(&symbol_re, sym, 0);
+		if (status != 0) {
+			char buf[100];
+			regerror(status, &symbol_re, buf, sizeof buf);
+			fprintf(stderr, "rule near '%s' will be ignored: %s\n",
+				expr, buf);
+			goto fail;
+		}
+	}
+
+	if (strcmp(a_lib, "MAIN") == 0) {
+		filter_lib_matcher_main_init(matcher);
+	} else {
+		/* Add ^ and $ to the library expression as well.  */
+		char lib[strlen(a_lib) + 3];
+		sprintf(lib, "^%s$", a_lib);
+
+		enum filter_lib_matcher_type type
+			= lib[0] == '/' ? FLM_PATHNAME : FLM_SONAME;
+
+		regex_t lib_re;
+		status = (lib_re_p ? regcomp : globcomp)(&lib_re, lib, 0);
+		if (status != 0) {
+			char buf[100];
+			regerror(status, &lib_re, buf, sizeof buf);
+			fprintf(stderr, "rule near '%s' will be ignored: %s\n",
+				expr, buf);
+
+			regfree(&symbol_re);
+			goto fail;
+		}
+		filter_lib_matcher_name_init(matcher, type, lib_re);
+	}
+
+	filter_rule_init(rule, type, matcher, symbol_re);
+	filter_add_rule(filt, rule);
+}
+
+static int
+parse_filter(struct filter *filt, char *expr)
+{
+	/* Filter is a chain of sym@lib rules separated by '-'.  If
+	 * the filter expression starts with '-', the missing initial
+	 * rule is implicitly *@*.  */
+
+	enum filter_rule_type type = FR_ADD;
+
+	while (*expr != 0) {
+		size_t s = strcspn(expr, "@-+");
+		char *symname = expr;
+		char *libname;
+		char *next = expr + s + 1;
+		enum filter_rule_type this_type = type;
+
+		if (expr[s] == 0) {
+			libname = "*";
+			expr = next - 1;
+
+		} else if (expr[s] == '-' || expr[s] == '+') {
+			type = expr[s] == '-' ? FR_SUBTRACT : FR_ADD;
+			expr[s] = 0;
+			libname = "*";
+			expr = next;
+
+		} else {
+			assert(expr[s] == '@');
+			expr[s] = 0;
+			s = strcspn(next, "-+");
+			if (s == 0) {
+				libname = "*";
+				expr = next;
+			} else if (next[s] == 0) {
+				expr = next + s;
+				libname = next;
+			} else {
+				assert(next[s] == '-' || next[s] == '+');
+				type = next[s] == '-' ? FR_SUBTRACT : FR_ADD;
+				next[s] = 0;
+				expr = next + s + 1;
+				libname = next;
+			}
+		}
+
+		assert(*libname != 0);
+		char *symend = symname + strlen(symname) - 1;
+		char *libend = libname + strlen(libname) - 1;
+		int sym_is_re = 0;
+		int lib_is_re = 0;
+
+		/*
+		 * /xxx/@... and ...@/xxx/ means that xxx are regular
+		 * expressions.  They are globs otherwise.
+		 *
+		 * /xxx@yyy/ is the same as /xxx/@/yyy/
+		 *
+		 * @/xxx matches library path name
+		 * @.xxx matches library relative path name
+		 */
+		if (symname[0] == '/') {
+			if (symname != symend && symend[0] == '/') {
+				++symname;
+				*symend-- = 0;
+				sym_is_re = 1;
+
+			} else {
+				sym_is_re = 1;
+				lib_is_re = 1;
+				++symname;
+
+				/* /XXX@YYY/ is the same as
+				 * /XXX/@/YYY/.  */
+				if (libend[0] != '/')
+					fprintf(stderr, "unmatched '/'"
+						" in symbol name\n");
+				else
+					*libend-- = 0;
+			}
+		}
+
+		/* If libname ends in '/', then we expect '/' in the
+		 * beginning too.  Otherwise the initial '/' is part
+		 * of absolute file name.  */
+		if (!lib_is_re && libend[0] == '/') {
+			lib_is_re = 1;
+			*libend-- = 0;
+			if (libname != libend && libname[0] == '/')
+				++libname;
+			else
+				fprintf(stderr, "unmatched '/'"
+					" in library name\n");
+		}
+
+		if (*symname == 0) /* /@AA/ */
+			symname = "*";
+		if (*libname == 0) /* /aa@/ */
+			libname = "*";
+
+		add_filter_rule(filt, expr, this_type,
+				symname, sym_is_re,
+				libname, lib_is_re);
+	}
+
+	return 0;
+}
+
+static struct filter *
+recursive_parse_chain(char *expr)
+{
+	struct filter *filt = malloc(sizeof(*filt));
+	if (filt == NULL) {
+		fprintf(stderr, "(part of) filter will be ignored: '%s': %s\n",
+			expr, strerror(errno));
+		return NULL;
+	}
+
+	filter_init(filt);
+	if (parse_filter(filt, expr) < 0) {
+		fprintf(stderr, "Filter '%s' will be ignored.\n", expr);
+		free(filt);
+		filt = NULL;
+	}
+
+	return filt;
+}
+
+static void
+parse_filter_chain(const char *expr, struct filter **retp)
+{
+	char *str = strdup(expr);
+	if (str == NULL) {
+		fprintf(stderr, "filter '%s' will be ignored: %s\n",
+			expr, strerror(errno));
+		return;
+	}
+	/* Support initial '!' for backward compatibility.  */
+	if (str[0] == '!')
+		str[0] = '-';
+
+	struct filter **tailp;
+	for (tailp = retp; *tailp != NULL; tailp = &(*tailp)->next)
+		;
+	*tailp = recursive_parse_chain(str);
+}
+
 char **
-process_options(int argc, char **argv) {
+process_options(int argc, char **argv)
+{
 	progname = argv[0];
 	options.output = stderr;
-	options.no_plt = 0;
 	options.no_signals = 0;
 #if defined(HAVE_LIBUNWIND)
 	options.bt_depth = -1;
 #endif /* defined(HAVE_LIBUNWIND) */
 
 	guess_cols();
+
+	int libcalls = 1;
 
 	while (1) {
 		int c;
@@ -237,14 +442,13 @@ process_options(int argc, char **argv) {
 			{"library", 1, 0, 'l'},
 			{"output", 1, 0, 'o'},
 			{"version", 0, 0, 'V'},
-			{"no-plt", 0, 0, 'g'},
 			{"no-signals", 0, 0, 'b'},
 #if defined(HAVE_LIBUNWIND)
 			{"where", 1, 0, 'w'},
 #endif /* defined(HAVE_LIBUNWIND) */
 			{0, 0, 0, 0}
 		};
-		c = getopt_long(argc, argv, "+cfhiLrStTVgb"
+		c = getopt_long(argc, argv, "+cfhiLrStTVb"
 # ifdef USE_DEMANGLE
 				"C"
 # endif
@@ -286,39 +490,11 @@ process_options(int argc, char **argv) {
 				err_usage();
 			}
 			break;
+
 		case 'e':
-			{
-				char *str_e = strdup(optarg);
-				if (!str_e) {
-					perror("ltrace: strdup");
-					exit(1);
-				}
-				if (str_e[0] == '!') {
-					opt_e_enable = 0;
-					str_e++;
-				}
-				while (*str_e) {
-					struct opt_e_t *tmp;
-					char *str2 = strchr(str_e, ',');
-					if (str2) {
-						*str2 = '\0';
-					}
-					tmp = malloc(sizeof(struct opt_e_t));
-					if (!tmp) {
-						perror("ltrace: malloc");
-						exit(1);
-					}
-					tmp->name = str_e;
-					tmp->next = opt_e;
-					opt_e = tmp;
-					if (str2) {
-						str_e = str2 + 1;
-					} else {
-						break;
-					}
-				}
-				break;
-			}
+			parse_filter_chain(optarg, &options.plt_filter);
+			break;
+
 		case 'f':
 			options.follow = 1;
 			break;
@@ -334,9 +510,6 @@ process_options(int argc, char **argv) {
 				opt_F = tmp;
 				break;
 			}
-		case 'g':
-			options.no_plt = 1;
-			break;
 		case 'h':
 			usage();
 			exit(0);
@@ -344,16 +517,11 @@ process_options(int argc, char **argv) {
 			opt_i++;
 			break;
 		case 'l':
-			if (library_num == MAX_LIBRARIES) {
-				fprintf(stderr,
-					"Too many libraries.  Maximum is %i.\n",
-					MAX_LIBRARIES);
-				exit(1);
-			}
-			library[library_num++] = optarg;
+			// XXX TODO
+			fprintf(stderr, "-l support not yet implemented\n");
 			break;
 		case 'L':
-			options.libcalls = 0;
+			libcalls = 0;
 			break;
 		case 'n':
 			options.indent = atoi(optarg);
@@ -362,7 +530,7 @@ process_options(int argc, char **argv) {
 			options.output = fopen(optarg, "w");
 			if (!options.output) {
 				fprintf(stderr,
-					"Can't open %s for output: %s\n",
+					"can't open %s for writing: %s\n",
 					optarg, strerror(errno));
 				exit(1);
 			}
@@ -421,10 +589,15 @@ process_options(int argc, char **argv) {
 			/* Fall Thru */
 
 		case 'x':
+<<<<<<< HEAD
 			{
 				add_opt_x_entry(optarg);
 				break;
 			}
+=======
+			parse_filter_chain(optarg, &options.static_filter);
+			break;
+>>>>>>> pmachata/libs
 
 		default:
 			err_usage();
@@ -454,6 +627,14 @@ process_options(int argc, char **argv) {
 			opt_F = chicken;
 		}
 		opt_F = egg;
+	}
+
+	/* Set default filter.  Use @MAIN for now, as that's what
+	 * ltrace used to have in the past.  XXX Maybe we should make
+	 * this "*" instead.  */
+	if (options.plt_filter == NULL && libcalls) {
+		parse_filter_chain("@MAIN", &options.plt_filter);
+		options.hide_caller = 1;
 	}
 
 	if (!opt_p && argc < 1) {

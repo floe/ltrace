@@ -24,13 +24,14 @@ struct dict_entry {
 
 struct dict {
 	struct dict_entry *buckets[DICTTABLESIZE];
-	unsigned int (*key2hash) (void *);
-	int (*key_cmp) (void *, void *);
+	unsigned int (*key2hash) (const void *);
+	int (*key_cmp) (const void *, const void *);
 };
 
 Dict *
-dict_init(unsigned int (*key2hash) (void *),
-		       int (*key_cmp) (void *, void *)) {
+dict_init(unsigned int (*key2hash) (const void *),
+	  int (*key_cmp) (const void *, const void *))
+{
 	Dict *d;
 	int i;
 
@@ -103,7 +104,31 @@ dict_enter(Dict *d, void *key, void *value) {
 }
 
 void *
-dict_find_entry(Dict *d, void *key) {
+dict_remove(Dict *d, void *key)
+{
+	assert(d != NULL);
+	debug(DEBUG_FUNCTION, "dict_remove(%p)", key);
+
+	unsigned int hash = d->key2hash(key);
+	unsigned int bucketpos = hash % DICTTABLESIZE;
+
+	struct dict_entry **entryp;
+	for (entryp = &d->buckets[bucketpos]; (*entryp) != NULL;
+	     entryp = &(*entryp)->next) {
+		struct dict_entry *entry = *entryp;
+		if (hash != entry->hash)
+			continue;
+		if (d->key_cmp(key, entry->key) == 0) {
+			*entryp = entry->next;
+			return entry->value;
+		}
+	}
+	return NULL;
+}
+
+void *
+dict_find_entry(Dict *d, const void *key)
+{
 	unsigned int hash;
 	unsigned int bucketpos;
 	struct dict_entry *entry;
@@ -147,7 +172,8 @@ dict_apply_to_all(Dict *d,
 /*****************************************************************************/
 
 unsigned int
-dict_key2hash_string(void *key) {
+dict_key2hash_string(const void *key)
+{
 	const char *s = (const char *)key;
 	unsigned int total = 0, shift = 0;
 
@@ -163,19 +189,22 @@ dict_key2hash_string(void *key) {
 }
 
 int
-dict_key_cmp_string(void *key1, void *key2) {
+dict_key_cmp_string(const void *key1, const void *key2)
+{
 	assert(key1);
 	assert(key2);
 	return strcmp((const char *)key1, (const char *)key2);
 }
 
 unsigned int
-dict_key2hash_int(void *key) {
+dict_key2hash_int(const void *key)
+{
 	return (unsigned long)key;
 }
 
 int
-dict_key_cmp_int(void *key1, void *key2) {
+dict_key_cmp_int(const void *key1, const void *key2)
+{
 	return key1 - key2;
 }
 

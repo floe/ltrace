@@ -24,7 +24,10 @@ libltrace_la_SOURCES = \
 	output.c \
 	proc.c \
 	read_config_file.c  \
-	summary.c
+	summary.c \
+	library.c \
+	filter.c \
+	glob.c
 
 libltrace_la_LIBADD = \
 	$(libelf_LIBS) \
@@ -56,7 +59,10 @@ noinst_HEADERS = \
 	ltrace.h \
 	options.h \
 	output.h \
-	read_config_file.h
+	read_config_file.h \
+	library.h \
+	filter.h \
+	glob.h
 
 dist_man1_MANS = \
 	ltrace.1

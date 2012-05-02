@@ -1,22 +1,23 @@
 #include "config.h"
 
+#include <sys/param.h>
+#include <sys/wait.h>
+#include <errno.h>
+#include <signal.h>
 #include <stdio.h>
 #include <stdlib.h>
-#include <unistd.h>
 #include <string.h>
-#include <errno.h>
-#include <sys/param.h>
-#include <signal.h>
-#include <sys/wait.h>
+#include <unistd.h>
 
 #include "common.h"
+#include "proc.h"
 
 char *command = NULL;
 
 int exiting = 0;		/* =1 if a SIGINT or SIGTERM has been received */
 
-static enum pcb_status
-stop_non_p_processes (Process * proc, void * data)
+static enum callback_status
+stop_non_p_processes(Process *proc, void *data)
 {
 	int stop = 1;
 
@@ -38,7 +39,7 @@ stop_non_p_processes (Process * proc, void * data)
 		kill(proc->pid, SIGSTOP);
 	}
 
-	return pcb_cont;
+	return CBS_CONT;
 }
 
 static void
@@ -104,20 +105,22 @@ ltrace_init(int argc, char **argv) {
 		}
 		opt_F = opt_F->next;
 	}
-	if (opt_e) {
-		struct opt_e_t *tmp = opt_e;
-		while (tmp) {
-			debug(1, "Option -e: %s\n", tmp->name);
-			tmp = tmp->next;
-		}
-	}
 	if (command) {
 		/* Check that the binary ABI is supported before
 		 * calling execute_program.  */
 		struct ltelf lte = {};
 		open_elf(&lte, command);
 
-		open_program(command, execute_program(command, argv), 0);
+		pid_t pid = execute_program(command, argv);
+		struct Process *proc = open_program(command, pid);
+		if (proc == NULL) {
+			fprintf(stderr, "couldn't open program '%s': %s\n",
+				command, strerror(errno));
+			exit(EXIT_FAILURE);
+		}
+
+		trace_set_options(proc);
+		continue_process(pid);
 	}
 	opt_p_tmp = opt_p;
 	while (opt_p_tmp) {

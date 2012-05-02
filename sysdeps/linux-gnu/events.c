@@ -12,6 +12,8 @@
 #include <unistd.h>
 
 #include "common.h"
+#include "breakpoint.h"
+#include "proc.h"
 
 static Event event;
 
@@ -20,10 +22,10 @@ static Event event;
 static Event * delayed_events = NULL;
 static Event * end_delayed_events = NULL;
 
-static enum pcb_status
+static enum callback_status
 first (Process * proc, void * data)
 {
-	return pcb_stop;
+	return CBS_STOP;
 }
 
 void
@@ -172,25 +174,7 @@ next_event(void)
 	}
 	get_arch_dep(event.proc);
 	debug(3, "event from pid %u", pid);
-	if (event.proc->breakpoints_enabled == -1)
-		trace_set_options(event.proc, event.proc->pid);
 	Process *leader = event.proc->leader;
-	if (leader == event.proc) {
-		if (event.proc->breakpoints_enabled == -1) {
-			event.type = EVENT_NONE;
-			enable_all_breakpoints(event.proc);
-			continue_process(event.proc->pid);
-			debug(DEBUG_EVENT,
-			      "event: NONE: pid=%d (enabling breakpoints)",
-			      pid);
-			return &event;
-		} else if (!event.proc->libdl_hooked) {
-			/* debug struct may not have been written yet.. */
-			if (linkmap_init(event.proc, &main_lte) == 0) {
-				event.proc->libdl_hooked = 1;
-			}
-		}
-	}
 
 	/* The process should be stopped after the waitpid call.  But
 	 * when the whole thread group is terminated, we see
