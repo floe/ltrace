@@ -22,6 +22,7 @@
  * Modified from sysdeps/linux-gnu/breakpoint.c and added ARM Thumb support.
  */
 
+#include "breakpoint.h"
 #include <sys/ptrace.h>
 #include "config.h"
 #include "common.h"
@@ -44,11 +45,11 @@ arch_enable_breakpoint(pid_t pid, struct breakpoint *sbp)
 		}
 		current.l = ptrace(PTRACE_PEEKTEXT, pid, sbp->addr + i * sizeof(long), 0);
 
-		debug(2, "current = 0x%lx, orig_value = 0x%lx, thumb_mode = %d", current.l, orig.l, sbp->thumb_mode);
+		debug(2, "current = 0x%lx, orig_value = 0x%lx, thumb_mode = %d", current.l, orig.l, sbp->arch.thumb_mode);
 		for (j = 0; j < sizeof(long) && i * sizeof(long) + j < BREAKPOINT_LENGTH; j++) {
 
 			sbp->orig_value[i * sizeof(long) + j] = bytes[j];
-			if (!sbp->thumb_mode) {
+			if (!sbp->arch.thumb_mode) {
 				bytes[j] = break_insn[i * sizeof(long) + j];
 			}
 			else if (j < THUMB_BREAKPOINT_LENGTH) {
@@ -75,7 +76,7 @@ arch_disable_breakpoint(pid_t pid, const struct breakpoint *sbp)
 		}
 		current.l = ptrace(PTRACE_PEEKTEXT, pid, sbp->addr + i * sizeof(long), 0);
 
-		debug(2, "current = 0x%lx, orig_value = 0x%lx, thumb_mode = %d", current.l, orig.l, sbp->thumb_mode);
+		debug(2, "current = 0x%lx, orig_value = 0x%lx, thumb_mode = %d", current.l, orig.l, sbp->arch.thumb_mode);
 		for (j = 0; j < sizeof(long) && i * sizeof(long) + j < BREAKPOINT_LENGTH; j++) {
 			bytes[j] = sbp->orig_value[i * sizeof(long) + j];
 		}

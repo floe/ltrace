@@ -27,6 +27,7 @@
 # include <libunwind.h>
 #endif /* defined(HAVE_LIBUNWIND) */
 
+#include "time.h"
 #include "ltrace.h"
 #include "dict.h"
 #include "sysdep.h"

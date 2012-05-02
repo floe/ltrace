@@ -45,5 +45,3 @@ extern struct opt_p_t *opt_p;	/* attach to process with a given pid */
 extern struct opt_F_t *opt_F;	/* alternate configuration file(s) */
 
 extern char **process_options(int argc, char **argv);
-
-extern void add_opt_x_entry(char* name);

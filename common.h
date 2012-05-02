@@ -15,6 +15,7 @@
 #include "ltrace-elf.h"
 #include "read_config_file.h"
 #include "proc.h"
+#include "library.h"
 
 #if defined HAVE_LIBIBERTY || defined HAVE_LIBSUPC__
 # define USE_DEMANGLE
@@ -251,7 +252,6 @@ void arch_process_destroy(struct Process *proc);
 int arch_process_clone(struct Process *retp, struct Process *proc);
 int arch_process_exec(struct Process *proc);
 
-typedef void *target_address_t;
 /* This should extract entry point address and interpreter (dynamic
  * linker) bias if possible.  Returns 0 if there were no errors, -1
  * otherwise.  Sets *ENTRYP and *INTERP_BIASP to non-zero values if

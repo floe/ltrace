@@ -2,6 +2,9 @@
   Dictionary based on code by Morten Eriksen <mortene@sim.no>.
 */
 
+#ifndef _DICT_H_
+#define _DICT_H_
+
 typedef struct dict Dict;
 
 extern Dict *dict_init(unsigned int (*key2hash) (const void *),
@@ -25,3 +28,5 @@ extern Dict * dict_clone2(Dict * old,
 			  void * (* key_clone)(void * key, void * data),
 			  void * (* value_clone)(void * value, void * data),
 			  void * data);
+
+#endif // _DICT_H_

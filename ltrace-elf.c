@@ -3,19 +3,16 @@
 #include <assert.h>
 #include <endian.h>
 #include <errno.h>
-<<<<<<< HEAD
 #ifndef __ANDROID__
 	#include <error.h>
+	#include <search.h>
 #else
 	#include <stdio.h>
 	#define error(status, errnum, format, ...) printf(format "\n", __VA_ARGS__)
 #endif
-=======
->>>>>>> pmachata/libs
 #include <fcntl.h>
 #include <gelf.h>
 #include <inttypes.h>
-#include <search.h>
 #include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -23,7 +20,9 @@
 #include <unistd.h>
 
 #include "common.h"
-<<<<<<< HEAD
+#include "proc.h"
+#include "library.h"
+#include "filter.h"
 
 char packagename[1024] = "";
 
@@ -85,21 +84,6 @@ const char* ndk_blacklist[] = {
 	"_Unwind_VRS_Set",
 	NULL
 };
-
-void do_close_elf(struct ltelf *lte);
-void add_library_symbol(GElf_Addr addr, const char *name,
-		struct library_symbol **library_symbolspp,
-		enum toplt type_of_plt, int is_weak);
-int in_load_libraries(const char *name, struct ltelf *lte, size_t count, GElf_Sym *sym);
-static GElf_Addr opd2addr(struct ltelf *ltc, GElf_Addr addr);
-
-struct library_symbol *library_symbols = NULL;
-struct ltelf main_lte;
-=======
-#include "proc.h"
-#include "library.h"
-#include "filter.h"
->>>>>>> pmachata/libs
 
 #ifdef PLT_REINITALISATION_BP
 extern char *PLTs_initialized_by_here;
@@ -239,7 +223,7 @@ need_data(Elf_Data *data, size_t offset, size_t size)
 }
 
 
-unsigned int watch = 0;
+unsigned int watch = 1;
 
 #define DEF_READER(NAME, SIZE)						\
 	int								\
@@ -272,7 +256,7 @@ int
 open_elf(struct ltelf *lte, const char *filename)
 {
 	elf_version(EV_CURRENT);
-	watch = 0;
+	watch = 1;
 
 	char alt_path1[1024] = "/system/lib/";
 	char alt_path2[1024] = "/system/lib/hw/";
@@ -280,13 +264,13 @@ open_elf(struct ltelf *lte, const char *filename)
 
 	snprintf(alt_path3,sizeof(alt_path3),"/data/data/%s/lib/",packagename);
 
-	debug(DEBUG_FUNCTION, "do_init_elf(filename=%s)", filename);
+	debug(DEBUG_FUNCTION, "open_elf(filename=%s)", filename);
 	debug(1, "Reading ELF from %s...", filename);
 
 	lte->fd = open(filename, O_RDONLY);
-	if (lte->fd == -1) { debug(1, "searching /system/lib/..."); lte->fd = open( strcat(alt_path1, filename), O_RDONLY ); } 
-	if (lte->fd == -1) { debug(1, "searching /sys/lib/hw/..."); lte->fd = open( strcat(alt_path2, filename), O_RDONLY ); } 
-	if (lte->fd == -1) { debug(1, "searching /data/data/ ..."); lte->fd = open( strcat(alt_path3, filename), O_RDONLY ); if (lte->fd != -1) watch = 1; } 
+	if (lte->fd == -1) { debug(1, "searching /system/lib/..."); lte->fd = open( strcat(alt_path1, filename), O_RDONLY ); }
+	if (lte->fd == -1) { debug(1, "searching /sys/lib/hw/..."); lte->fd = open( strcat(alt_path2, filename), O_RDONLY ); }
+	if (lte->fd == -1) { debug(1, "searching /data/data/ ..."); lte->fd = open( strcat(alt_path3, filename), O_RDONLY ); if (lte->fd != -1) watch = 1; }
 	if (lte->fd == -1) {
 		debug(1, "Can't open \"%s\", using as possible Android package name.\n", filename);
 		strncpy(packagename,filename,sizeof(packagename));
@@ -375,7 +359,7 @@ read_symbol_table(struct ltelf *lte, const char *filename,
 static int
 do_init_elf(struct ltelf *lte, const char *filename, GElf_Addr bias)
 {
-	int i;
+	unsigned int i;
 	GElf_Addr relplt_addr = 0;
 	GElf_Addr soname_offset = 0;
 
@@ -510,7 +494,7 @@ do_init_elf(struct ltelf *lte, const char *filename, GElf_Addr bias)
 		}
 		if (!found) {
 			debug(1,"found non-blacklisted function: %s",name);
-			add_opt_x_entry((char*)name);
+			//add_opt_x_entry((char*)name);
 		}
 	}
 
@@ -648,6 +632,39 @@ unique_symbol_cmp(const void *key, const void *val)
 	const struct unique_symbol *sym_val = val;
 	return sym_key->addr != sym_val->addr;
 }
+
+#ifdef __ANDROID__
+
+static void*
+lsearch(const void *key, void *base, size_t *nmemb, size_t size, int(*compar)(const void *, const void *))
+{
+	size_t count = *nmemb;
+	unsigned int i = 0;
+	void* current = base;
+	for (i = 0; i < count; i++) {
+		current = base+(i*size);
+		if (compar(current,key) == 0)
+			return current;
+	}
+	current += size;
+	memcpy( current, key, size );
+	*nmemb += 1;
+	return current;
+}
+
+char*
+rindex(const char *s, int c)
+{
+	char* last = (char*)s;
+	while (*s) {
+		if (*s == c)
+			last = (char*)s;
+		s++;
+	}
+	return last;
+}
+
+#endif
 
 static int
 populate_this_symtab(struct Process *proc, const char *filename,
