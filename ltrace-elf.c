@@ -210,13 +210,40 @@ elf_get_section_type(struct ltelf *lte, GElf_Word type,
 				  &type_p, &type);
 }
 
+struct section_named_data {
+	struct ltelf *lte;
+	const char *name;
+};
+
 static int
-need_data(Elf_Data *data, size_t offset, size_t size)
+name_p(Elf_Scn *scn, GElf_Shdr *shdr, void *d)
+{
+	struct section_named_data *data = d;
+	const char *name = elf_strptr(data->lte->elf,
+				      data->lte->ehdr.e_shstrndx,
+				      shdr->sh_name);
+	return strcmp(name, data->name) == 0;
+}
+
+int
+elf_get_section_named(struct ltelf *lte, const char *name,
+		     Elf_Scn **tgt_sec, GElf_Shdr *tgt_shdr)
+{
+	struct section_named_data data = {
+		.lte = lte,
+		.name = name,
+	};
+	return elf_get_section_if(lte, tgt_sec, tgt_shdr,
+				  &name_p, &data);
+}
+
+static int
+need_data(Elf_Data *data, GElf_Xword offset, GElf_Xword size)
 {
 	assert(data != NULL);
 	if (data->d_size < size || offset > data->d_size - size) {
-		debug(1, "Not enough data to read %zd-byte value"
-		      " at offset %zd.", size, offset);
+		debug(1, "Not enough data to read %"PRId64"-byte value"
+		      " at offset %"PRId64".", size, offset);
 		return -1;
 	}
 	return 0;
@@ -227,7 +254,7 @@ unsigned int watch = 1;
 
 #define DEF_READER(NAME, SIZE)						\
 	int								\
-	NAME(Elf_Data *data, size_t offset, uint##SIZE##_t *retp)	\
+	NAME(Elf_Data *data, GElf_Xword offset, uint##SIZE##_t *retp)	\
 	{								\
 		if (!need_data(data, offset, SIZE / 8) < 0)		\
 			return -1;					\
@@ -710,7 +737,15 @@ populate_this_symtab(struct Process *proc, const char *filename,
 		    || sym.st_value == 0)
 			continue;
 
-		const char *name = strtab + sym.st_name;
+		const char *orig_name = strtab + sym.st_name;
+		const char *version = strchr(orig_name, '@');
+		size_t len = version != NULL ? (assert(version > orig_name),
+						(size_t)(version - orig_name))
+			: strlen(orig_name);
+		char name[len + 1];
+		memcpy(name, orig_name, len);
+		name[len] = 0;
+
 		if (!filter_matches_symbol(options.static_filter, name, lib))
 			continue;
 
@@ -724,22 +759,12 @@ populate_this_symtab(struct Process *proc, const char *filename,
 		 * translate those.  */
 		if (secflags[sym.st_shndx] & SHF_EXECINSTR) {
 			naddr = addr;
-		} else if (arch_translate_address(proc, addr, &naddr) < 0) {
+		} else if (arch_translate_address(lte, addr, &naddr) < 0) {
 			fprintf(stderr,
 				"couldn't translate address of %s@%s: %s\n",
 				name, lib->soname, strerror(errno));
 			continue;
 		}
-
-		/* If the translation actually took place, and wasn't
-		 * a no-op, then bias again.  XXX We shouldn't apply
-		 * second bias for libraries that were open at the
-		 * time that we attached.  In fact what we should do
-		 * is look at each translated address, whether it
-		 * falls into a SHF_EXECINSTR section.  If it does,
-		 * it's most likely already translated.  */
-		if (addr != naddr)
-			naddr += lte->bias;
 
 		char *full_name;
 		if (lib->type != LT_LIBTYPE_MAIN) {
@@ -848,7 +873,7 @@ ltelf_read_library(struct library *lib, struct Process *proc,
 	/* XXX The double cast should be removed when
 	 * target_address_t becomes integral type.  */
 	target_address_t entry = (target_address_t)(uintptr_t)lte.entry_addr;
-	if (arch_translate_address(proc, entry, &entry) < 0)
+	if (arch_translate_address(&lte, entry, &entry) < 0)
 		goto fail;
 
 	/* XXX The double cast should be removed when
