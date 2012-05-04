@@ -11,7 +11,12 @@
 #include <errno.h>
 #include <stdlib.h>
 #include <assert.h>
-#include <error.h>
+#ifndef __ANDROID__
+	#include <error.h>
+#else
+	#include <stdio.h>
+	#define error(status, errnum, format, ...) printf(format "\n", __VA_ARGS__)
+#endif
 
 #include "common.h"
 
