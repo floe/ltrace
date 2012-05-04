@@ -19,6 +19,8 @@
 
 #include "common.h"
 
+#define LIBINC  0x00100000
+
 char packagename[1024] = "";
 
 const char* ndk_blacklist[] = {
@@ -220,8 +222,10 @@ open_elf(struct ltelf *lte, const char *filename)
 	if (lte->fd == -1) { debug(1, "searching /sys/lib/hw/..."); lte->fd = open( strcat(alt_path2, filename), O_RDONLY ); }
 	if (lte->fd == -1) { debug(1, "searching /data/data/ ..."); lte->fd = open( strcat(alt_path3, filename), O_RDONLY ); if (lte->fd != -1) watch = 1; }
 	if (lte->fd == -1) {
-		debug(1, "Can't open \"%s\", using as possible Android package name.\n", filename);
+		debug(1, "Can't open \"%s\", using as Android package name. Opening app_process instead.\n", filename);
 		strncpy(packagename,filename,sizeof(packagename));
+		lte->fd = open( "/system/bin/app_process", O_RDONLY );
+		if (lte->fd == -1) return -1;
 	}
 
 	elf_version(EV_CURRENT);
@@ -702,6 +706,11 @@ in_load_libraries(const char *name, struct ltelf *lte, size_t count, GElf_Sym *s
 		if (lte[i].hash == NULL)
 			continue;
 
+		if (i > 0)
+			debug(2,"checking in library %s",library[i-1]);
+		else
+			debug(2,"checking in main process");
+
 		if (lte[i].hash_type == SHT_GNU_HASH) {
 			Elf32_Word * hashbase = lte[i].hash;
 			Elf32_Word nbuckets = *hashbase++;
@@ -870,7 +879,7 @@ read_elf(Process *proc) {
 					addr = arch_plt_sym_val(lte, i, &rela);
 				}
 
-				add_library_symbol(addr, name, &library_symbols, pltt,
+				add_library_symbol(addr+LIBINC, name, &library_symbols, pltt,
 						ELF64_ST_BIND(sym.st_info) == STB_WEAK);
 				if (!lib_tail)
 					lib_tail = &(library_symbols->next);
@@ -944,7 +953,7 @@ read_elf(Process *proc) {
 					xptr->name, sym.st_value);
 			addr = sym.st_value;
 			if (ELF32_ST_TYPE (sym.st_info) == STT_FUNC) {
-				add_library_symbol(addr, xptr->name, lib_tail, LS_TOPLT_NONE, 0);
+				add_library_symbol(addr+LIBINC, xptr->name, lib_tail, LS_TOPLT_NONE, 0);
 				xptr->found = 1;
 				found_count++;
 			}
