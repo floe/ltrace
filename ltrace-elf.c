@@ -80,7 +80,6 @@ const char* ndk_blacklist[] = {
 	NULL
 };
 
-void do_init_elf(struct ltelf *lte, const char *filename);
 void do_close_elf(struct ltelf *lte);
 void add_library_symbol(GElf_Addr addr, const char *name,
 		struct library_symbol **library_symbolspp,
@@ -202,6 +201,8 @@ static GElf_Addr get_glink_vma(struct ltelf *lte, GElf_Addr ppcgot,
 	return 0;
 }
 
+unsigned int watch = 0;
+
 int
 open_elf(struct ltelf *lte, const char *filename)
 {
@@ -211,8 +212,6 @@ open_elf(struct ltelf *lte, const char *filename)
 	char alt_path3[1024] = "";
 
 	snprintf(alt_path3,sizeof(alt_path3),"/data/data/%s/lib/",packagename);
-
-	unsigned int i, watch = 0;
 
 	debug(DEBUG_FUNCTION, "open_elf(filename=%s)", filename);
 	debug(1, "Reading ELF from %s...", filename);
@@ -225,7 +224,7 @@ open_elf(struct ltelf *lte, const char *filename)
 	if (lte->fd == -1) {
 		debug(1, "Can't open \"%s\", using as possible Android package name.\n", filename);
 		strncpy(packagename,filename,sizeof(packagename));
-		return;
+		return 0;
 	}
 
 	elf_version(EV_CURRENT);
@@ -267,7 +266,7 @@ open_elf(struct ltelf *lte, const char *filename)
 
 int
 do_init_elf(struct ltelf *lte, const char *filename) {
-	int i;
+	unsigned int i;
 	GElf_Addr relplt_addr = 0;
 	size_t relplt_size = 0;
 
