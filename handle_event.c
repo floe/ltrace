@@ -670,6 +670,9 @@ handle_breakpoint(Event *event)
 				leader->list_of_symbols = new_sym;
 				insert_breakpoint(event->proc, addr, new_sym, 1);
 			}
+#else
+			struct library_symbol *libsym =
+			    event->proc->callstack[i].c_un.libfunc;
 #endif
 			for (j = event->proc->callstack_depth - 1; j > i; j--) {
 				callstack_pop(event->proc);
