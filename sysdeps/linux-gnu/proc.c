@@ -504,7 +504,7 @@ linkmap_init(Process *proc, struct ltelf *lte) {
 
 	data.lte = lte;
 
-	add_library_symbol(((uint32_t)rdbg->r_brk), "", &library_symbols, LS_TOPLT_NONE, 0);
+	add_library_symbol((uint32_t)rdbg->r_brk, "", &library_symbols, LS_TOPLT_NONE, 0);
 	insert_breakpoint(proc, sym2addr(proc, library_symbols),
 			  library_symbols, 1);
 

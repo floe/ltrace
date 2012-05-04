@@ -206,7 +206,6 @@ unsigned int watch = 0;
 int
 open_elf(struct ltelf *lte, const char *filename)
 {
-
 	char alt_path1[1024] = "/system/lib/";
 	char alt_path2[1024] = "/system/lib/hw/";
 	char alt_path3[1024] = "";
@@ -217,14 +216,12 @@ open_elf(struct ltelf *lte, const char *filename)
 	debug(1, "Reading ELF from %s...", filename);
 
 	lte->fd = open(filename, O_RDONLY);
-
-	if (lte->fd == -1) { debug(1, "searching /system/lib/..."); lte->fd = open( strcat(alt_path1, filename), O_RDONLY ); } 
-	if (lte->fd == -1) { debug(1, "searching /sys/lib/hw/..."); lte->fd = open( strcat(alt_path2, filename), O_RDONLY ); } 
-	if (lte->fd == -1) { debug(1, "searching /data/data/ ..."); lte->fd = open( strcat(alt_path3, filename), O_RDONLY ); if (lte->fd != -1) watch = 1; } 
+	if (lte->fd == -1) { debug(1, "searching /system/lib/..."); lte->fd = open( strcat(alt_path1, filename), O_RDONLY ); }
+	if (lte->fd == -1) { debug(1, "searching /sys/lib/hw/..."); lte->fd = open( strcat(alt_path2, filename), O_RDONLY ); }
+	if (lte->fd == -1) { debug(1, "searching /data/data/ ..."); lte->fd = open( strcat(alt_path3, filename), O_RDONLY ); if (lte->fd != -1) watch = 1; }
 	if (lte->fd == -1) {
 		debug(1, "Can't open \"%s\", using as possible Android package name.\n", filename);
 		strncpy(packagename,filename,sizeof(packagename));
-		return 0;
 	}
 
 	elf_version(EV_CURRENT);
@@ -678,7 +675,7 @@ symbol_matches(struct ltelf *lte, size_t lte_i, GElf_Sym *sym,
 	else {
 		tmp->st_value += lte[lte_i].base_addr;
 		debug(2, "symbol found: %s, %zd, %#" PRIx64,
-		      name, lte_i, tmp->st_value);
+		      lte[lte_i].dynstr + tmp->st_name, lte_i, tmp->st_value);
 	}
 	return tmp->st_value != 0
 		&& tmp->st_shndx != SHN_UNDEF
@@ -860,6 +857,7 @@ read_elf(Process *proc) {
 			name = lte->dynstr + sym.st_name;
 			count = library_num ? library_num+1 : 0;
 
+			debug(2,"checking for name %s ...",name);
 			if (in_load_libraries(name, lte, count, NULL)) {
 				enum toplt pltt;
 				if (sym.st_value == 0 && lte->plt_stub_vma != 0) {
