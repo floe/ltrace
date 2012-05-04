@@ -859,6 +859,7 @@ read_elf(Process *proc) {
 			name = lte->dynstr + sym.st_name;
 			count = library_num ? library_num+1 : 0;
 
+			debug(2,"checking for name %s ...",name);
 			if (in_load_libraries(name, lte, count, NULL)) {
 				enum toplt pltt;
 				if (sym.st_value == 0 && lte->plt_stub_vma != 0) {
