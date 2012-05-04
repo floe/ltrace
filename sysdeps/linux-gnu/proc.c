@@ -15,7 +15,12 @@
 #include <ctype.h>
 #include <errno.h>
 #include <sys/syscall.h>
-#include <error.h>
+#ifndef __ANDROID__
+	#include <error.h>
+#else
+	#include <stdio.h>
+	#define error(status, errnum, format, ...) printf(format "\n", __VA_ARGS__)
+#endif
 
 
 /* We use this macro to refer to ELF types independent of the native wordsize.
@@ -68,6 +73,17 @@ open_status_file(pid_t pid)
 	   because the process terminates.  */
 	return fopen(fn, "r");
 }
+
+#ifdef __ANDROID__
+
+ssize_t getline(char **lineptr, size_t *n, FILE *stream)
+{
+	char* buf = malloc(1024);
+	*lineptr = buf;
+	if (!fgets(buf,1024,stream)) return -1; else return 0;
+}
+
+#endif
 
 static char *
 find_line_starting(FILE * file, const char * prefix, size_t len)
