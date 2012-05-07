@@ -24,8 +24,12 @@
 
 #include "breakpoint.h"
 #include <sys/ptrace.h>
+#include <sys/types.h>
+
 #include "config.h"
-#include "common.h"
+#include "breakpoint.h"
+#include "debug.h"
+#include "proc.h"
 
 void
 arch_enable_breakpoint(pid_t pid, struct breakpoint *sbp)
@@ -45,7 +49,8 @@ arch_enable_breakpoint(pid_t pid, struct breakpoint *sbp)
 		}
 		current.l = ptrace(PTRACE_PEEKTEXT, pid, sbp->addr + i * sizeof(long), 0);
 
-		debug(2, "current = 0x%lx, orig_value = 0x%lx, thumb_mode = %d", current.l, orig.l, sbp->arch.thumb_mode);
+		debug(2, "current = 0x%lx, orig_value = 0x%lx, thumb_mode = %d",
+		      current.l, orig.l, sbp->arch.thumb_mode);
 		for (j = 0; j < sizeof(long) && i * sizeof(long) + j < BREAKPOINT_LENGTH; j++) {
 
 			sbp->orig_value[i * sizeof(long) + j] = bytes[j];
@@ -56,7 +61,8 @@ arch_enable_breakpoint(pid_t pid, struct breakpoint *sbp)
 				bytes[j] = thumb_break_insn[i * sizeof(long) + j];
 			}
 		}
-		ptrace(PTRACE_POKETEXT, pid, sbp->addr + i * sizeof(long), (void*)current.l);
+		ptrace(PTRACE_POKETEXT, pid, sbp->addr + i * sizeof(long),
+		       (void *)current.l);
 	}
 }
 
@@ -76,11 +82,13 @@ arch_disable_breakpoint(pid_t pid, const struct breakpoint *sbp)
 		}
 		current.l = ptrace(PTRACE_PEEKTEXT, pid, sbp->addr + i * sizeof(long), 0);
 
-		debug(2, "current = 0x%lx, orig_value = 0x%lx, thumb_mode = %d", current.l, orig.l, sbp->arch.thumb_mode);
+		debug(2, "current = 0x%lx, orig_value = 0x%lx, thumb_mode = %d",
+		      current.l, orig.l, sbp->arch.thumb_mode);
 		for (j = 0; j < sizeof(long) && i * sizeof(long) + j < BREAKPOINT_LENGTH; j++) {
 			bytes[j] = sbp->orig_value[i * sizeof(long) + j];
 		}
-		ptrace(PTRACE_POKETEXT, pid, sbp->addr + i * sizeof(long), (void*)current.l);
+		ptrace(PTRACE_POKETEXT, pid, sbp->addr + i * sizeof(long),
+		       (void *)current.l);
 	}
 }
 
