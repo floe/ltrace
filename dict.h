@@ -28,9 +28,6 @@
  * Dictionary based on code by Morten Eriksen <mortene@sim.no>.
  */
 
-#ifndef _DICT_H_
-#define _DICT_H_
-
 typedef struct dict Dict;
 
 extern Dict *dict_init(unsigned int (*key2hash) (const void *),

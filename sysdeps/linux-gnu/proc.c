@@ -30,14 +30,6 @@
 #include "proc.h"
 #include "library.h"
 
-/* We use this macro to refer to ELF types independent of the native wordsize.
-   `ElfW(TYPE)' is used in place of `Elf32_TYPE' or `Elf64_TYPE'.  */
-#define ElfW(type)	_ElfW (Elf, __ELF_NATIVE_CLASS, type)
-#define _ElfW(e,w,t)	_ElfW_1 (e, w, _##t)
-#define _ElfW_1(e,w,t)	e##w##t
-
-#define __ELF_NATIVE_CLASS 32
-
 /* /proc/pid doesn't exist just after the fork, and sometimes `ltrace'
  * couldn't open it to find the executable.  So it may be necessary to
  * have a bit delay

@@ -55,7 +55,7 @@ syscall_p(Process *proc, int status, int *sysnum) {
 		if (insn == 0xef000000 || insn == 0x0f000000
 		    || (insn & 0xffff0000) == 0xdf000000) {
 			/* EABI syscall */
-			*sysnum = ptrace(PTRACE_PEEKUSER, proc->pid, (void*)off_r7, 0);
+			*sysnum = ptrace(PTRACE_PEEKUSER, proc->pid, off_r7, 0);
 		} else if ((insn & 0xfff00000) == 0xef900000) {
 			/* old ABI syscall */
 			*sysnum = insn & 0xfffff;

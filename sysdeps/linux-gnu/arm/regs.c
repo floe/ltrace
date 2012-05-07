@@ -21,24 +21,24 @@
 
 void *
 get_instruction_pointer(Process *proc) {
-	return (void *)ptrace(PTRACE_PEEKUSER, proc->pid, (void*)off_pc, 0);
+	return (void *)ptrace(PTRACE_PEEKUSER, proc->pid, off_pc, 0);
 }
 
 void
 set_instruction_pointer(Process *proc, void *addr) {
-	ptrace(PTRACE_POKEUSER, proc->pid, (void*)off_pc, addr);
+	ptrace(PTRACE_POKEUSER, proc->pid, off_pc, addr);
 }
 
 void *
 get_stack_pointer(Process *proc) {
-	return (void *)ptrace(PTRACE_PEEKUSER, proc->pid, (void*)off_sp, 0);
+	return (void *)ptrace(PTRACE_PEEKUSER, proc->pid, off_sp, 0);
 }
 
 /* really, this is given the *stack_pointer expecting
  * a CISC architecture; in our case, we don't need that */
 void *
 get_return_addr(Process *proc, void *stack_pointer) {
-	long addr = ptrace(PTRACE_PEEKUSER, proc->pid, (void*)off_lr, 0);
+	long addr = ptrace(PTRACE_PEEKUSER, proc->pid, off_lr, 0);
 
 	/* Remember & unset the thumb mode bit.  XXX This is really a
 	 * bit of a hack, as we assume that the following
@@ -55,5 +55,5 @@ get_return_addr(Process *proc, void *stack_pointer) {
 void
 set_return_addr(Process *proc, void *addr) {
 	long iaddr = (int)addr | proc->thumb_mode;
-	ptrace(PTRACE_POKEUSER, proc->pid, (void*)off_lr, (void*)iaddr);
+	ptrace(PTRACE_POKEUSER, proc->pid, off_lr, (void *)iaddr);
 }
