@@ -15,7 +15,6 @@
 #include "ltrace-elf.h"
 #include "read_config_file.h"
 #include "proc.h"
-#include "library.h"
 
 #if defined HAVE_LIBIBERTY || defined HAVE_LIBSUPC__
 # define USE_DEMANGLE

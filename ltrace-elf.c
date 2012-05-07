@@ -4,11 +4,7 @@
 #include <endian.h>
 #include <errno.h>
 #ifndef __ANDROID__
-	#include <error.h>
 	#include <search.h>
-#else
-	#include <stdio.h>
-	#define error(status, errnum, format, ...) printf(format "\n", __VA_ARGS__)
 #endif
 #include <fcntl.h>
 #include <gelf.h>

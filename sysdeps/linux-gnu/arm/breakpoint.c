@@ -22,7 +22,6 @@
  * Modified from sysdeps/linux-gnu/breakpoint.c and added ARM Thumb support.
  */
 
-#include "breakpoint.h"
 #include <sys/ptrace.h>
 #include <sys/types.h>
 

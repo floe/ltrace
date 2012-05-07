@@ -14,16 +14,6 @@
 #include <stdio.h>
 #include <string.h>
 #include <unistd.h>
-#include <dirent.h>
-#include <ctype.h>
-#include <errno.h>
-#include <sys/syscall.h>
-#ifndef __ANDROID__
-	#include <error.h>
-#else
-	#include <stdio.h>
-	#define error(status, errnum, format, ...) printf(format "\n", __VA_ARGS__)
-#endif
 
 #include "common.h"
 #include "breakpoint.h"
